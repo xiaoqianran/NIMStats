@@ -61,7 +61,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             last_ttft_ms INTEGER,
             last_latency_ms INTEGER,
             last_decode_tps REAL,
-            last_test_kind TEXT
+            last_test_kind TEXT,
+            last_throughput_valid INTEGER,
+            last_chars_per_second REAL,
+            last_capability_score REAL,
+            last_capability_pass INTEGER,
+            last_benchmark_version TEXT,
+            last_throughput_at TEXT,
+            last_capability_at TEXT
         );
         CREATE TABLE IF NOT EXISTS errors (
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +98,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             http_status           INTEGER,
             test_kind             TEXT,
             decode_tps            REAL,
+            throughput_valid      INTEGER,
+            chars_per_second      REAL,
+            capability_score      REAL,
+            capability_pass       INTEGER,
+            format_pass           INTEGER,
+            benchmark_version     TEXT,
+            throughput_latency_ms INTEGER,
+            throughput_ttft_ms    INTEGER,
             PRIMARY KEY (run_id, model_id, test_kind)
         );
         CREATE TABLE IF NOT EXISTS scheduler_state (
@@ -124,6 +139,13 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("last_latency_ms", "INTEGER"),
         ("last_decode_tps", "REAL"),
         ("last_test_kind", "TEXT"),
+        ("last_throughput_valid", "INTEGER"),
+        ("last_chars_per_second", "REAL"),
+        ("last_capability_score", "REAL"),
+        ("last_capability_pass", "INTEGER"),
+        ("last_benchmark_version", "TEXT"),
+        ("last_throughput_at", "TEXT"),
+        ("last_capability_at", "TEXT"),
     ]:
         if col not in mcols:
             conn.execute(f"ALTER TABLE models ADD COLUMN {col} {decl}")
@@ -145,6 +167,14 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("http_status", "INTEGER"),
         ("test_kind", "TEXT DEFAULT 'legacy'"),
         ("decode_tps", "REAL"),
+        ("throughput_valid", "INTEGER"),
+        ("chars_per_second", "REAL"),
+        ("capability_score", "REAL"),
+        ("capability_pass", "INTEGER"),
+        ("format_pass", "INTEGER"),
+        ("benchmark_version", "TEXT"),
+        ("throughput_latency_ms", "INTEGER"),
+        ("throughput_ttft_ms", "INTEGER"),
     ]:
         if col not in mrcols:
             conn.execute(f"ALTER TABLE model_results ADD COLUMN {col} {decl}")
@@ -316,8 +346,6 @@ def write_rolling_batch(
                 # health failed — keep health status as availability truth
                 primary = dict(health)
 
-            # Also store raw health/throughput detail rows when schema allows (test_kind in PK)
-            detail_rows = rows
             for m in [primary]:
                 error_id = _get_or_create(
                     conn, "errors", "text", sanitize_error(m.get("error"))
@@ -331,8 +359,10 @@ def write_rolling_batch(
                     conn.execute(
                         """INSERT INTO model_results
                            (run_id, model_id, success, error_id, response_time, tokens_generated,
-                            total_tokens, time_to_first_token, status, http_status, test_kind, decode_tps)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            total_tokens, time_to_first_token, status, http_status, test_kind, decode_tps,
+                            throughput_valid, chars_per_second, capability_score, capability_pass,
+                            format_pass, benchmark_version, throughput_latency_ms, throughput_ttft_ms)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             run_id,
                             model_id,
@@ -346,6 +376,14 @@ def write_rolling_batch(
                             m.get("httpStatus"),
                             test_kind,
                             m.get("decodeTps"),
+                            1 if m.get("throughputValid") else 0,
+                            m.get("charsPerSecond"),
+                            m.get("capabilityScore"),
+                            1 if m.get("capabilityPass") else 0,
+                            1 if m.get("formatPass") else 0,
+                            m.get("benchmarkVersion"),
+                            m.get("throughputResponseTime"),
+                            m.get("throughputTtft"),
                         ),
                     )
                 except sqlite3.IntegrityError:
@@ -353,7 +391,9 @@ def write_rolling_batch(
                         """UPDATE model_results SET
                            success=?, error_id=?, response_time=?, tokens_generated=?,
                            total_tokens=?, time_to_first_token=?, status=?, http_status=?,
-                           test_kind=?, decode_tps=?
+                           test_kind=?, decode_tps=?, throughput_valid=?, chars_per_second=?,
+                           capability_score=?, capability_pass=?, format_pass=?, benchmark_version=?,
+                           throughput_latency_ms=?, throughput_ttft_ms=?
                            WHERE run_id=? AND model_id=?""",
                         (
                             1 if m.get("success") else 0,
@@ -366,6 +406,14 @@ def write_rolling_batch(
                             m.get("httpStatus"),
                             test_kind,
                             m.get("decodeTps"),
+                            1 if m.get("throughputValid") else 0,
+                            m.get("charsPerSecond"),
+                            m.get("capabilityScore"),
+                            1 if m.get("capabilityPass") else 0,
+                            1 if m.get("formatPass") else 0,
+                            m.get("benchmarkVersion"),
+                            m.get("throughputResponseTime"),
+                            m.get("throughputTtft"),
                             run_id,
                             model_id,
                         ),
@@ -393,7 +441,14 @@ def write_rolling_batch(
                    last_ttft_ms=?,
                    last_latency_ms=?,
                    last_decode_tps=?,
-                   last_test_kind=?
+                   last_test_kind=?,
+                   last_throughput_valid=?,
+                   last_chars_per_second=?,
+                   last_capability_score=COALESCE(?, last_capability_score),
+                   last_capability_pass=CASE WHEN ? IS NULL THEN last_capability_pass ELSE ? END,
+                   last_benchmark_version=COALESCE(?, last_benchmark_version),
+                   last_throughput_at=CASE WHEN ? IS NULL THEN last_throughput_at ELSE ? END,
+                   last_capability_at=CASE WHEN ? IS NULL THEN last_capability_at ELSE ? END
                    WHERE id=?""",
                 (
                     status,
@@ -405,6 +460,16 @@ def write_rolling_batch(
                     metric_src.get("responseTime") if metric_src.get("success") else health.get("responseTime"),
                     metric_src.get("decodeTps") if metric_src and metric_src.get("success") else None,
                     metric_src.get("testKind") if metric_src else health.get("testKind"),
+                    1 if primary.get("throughputValid") else 0,
+                    primary.get("charsPerSecond"),
+                    primary.get("capabilityScore"),
+                    primary.get("capabilityScore"),
+                    1 if primary.get("capabilityPass") else 0,
+                    primary.get("benchmarkVersion"),
+                    primary.get("throughputResponseTime"),
+                    timestamp,
+                    primary.get("capabilityScore"),
+                    timestamp,
                     model_id,
                 ),
             )
@@ -458,7 +523,10 @@ def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
         rows = conn.execute(
             """SELECT name, current_status, last_checked_at, last_success_at,
                       last_http_status, last_error, last_ttft_ms, last_latency_ms,
-                      last_decode_tps, intelligence_score
+                      last_decode_tps, intelligence_score, last_throughput_valid,
+                      last_chars_per_second, last_capability_score,
+                      last_capability_pass, last_benchmark_version,
+                      last_throughput_at, last_capability_at
                FROM models ORDER BY name"""
         ).fetchall()
         models = []
@@ -480,6 +548,13 @@ def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
                     "last_latency_ms": r[7],
                     "last_decode_tps": r[8],
                     "intelligence_score": r[9],
+                    "last_throughput_valid": bool(r[10]) if r[10] is not None else None,
+                    "last_chars_per_second": r[11],
+                    "last_capability_score": r[12],
+                    "last_capability_pass": bool(r[13]) if r[13] is not None else None,
+                    "last_benchmark_version": r[14],
+                    "last_throughput_at": r[15],
+                    "last_capability_at": r[16],
                 }
             )
         return {

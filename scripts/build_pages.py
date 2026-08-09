@@ -21,6 +21,8 @@ API_ROUTES = {
     "top/speed/model": "top/speed.txt",
     "top/intelligence/index.json": "top/intelligence.json",
     "top/intelligence/model": "top/intelligence.txt",
+    "top/capability/index.json": "top/capability.json",
+    "top/capability/model": "top/capability.txt",
 }
 
 

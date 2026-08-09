@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from api_key_pool import load_api_keys  # noqa: E402
+from benchmark_suite import CAPABILITY_EXPECTED, grade_capability_response  # noqa: E402
 from build_pages import build_site  # noqa: E402
 from db_utils import sanitize_error  # noqa: E402
 from model_catalog import classify_model, is_chat_model, refresh_models  # noqa: E402
@@ -95,12 +96,23 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(batch, ["b", "c", "a"])
         self.assertEqual((start, end, cursor), (1, 4, 1))
 
+    def test_capability_suite_is_machine_graded(self) -> None:
+        exact = __import__("json").dumps(CAPABILITY_EXPECTED, separators=(",", ":"))
+        grade = grade_capability_response(exact)
+        self.assertEqual(grade["score"], 100.0)
+        self.assertTrue(grade["pass"])
+
+        wrapped = grade_capability_response(f"```json\n{exact}\n```")
+        self.assertEqual(wrapped["score"], 85.0)
+        self.assertFalse(wrapped["pass"])
+
     def test_pages_build_is_whitelisted_and_has_api_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "site"
             files = build_site(ROOT, output)
             self.assertIn("top/speed/index.json", files)
             self.assertIn("top/speed/model", files)
+            self.assertIn("top/capability/model", files)
             self.assertTrue((output / ".nojekyll").exists())
             self.assertFalse((output / "scripts" / "rolling_bench.py").exists())
             self.assertFalse((output / ".github").exists())

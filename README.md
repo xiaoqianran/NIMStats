@@ -16,13 +16,13 @@ GitHub Actions 默认每 5 分钟运行一次：
 1. 使用所有已配置密钥分别请求 NVIDIA `GET /v1/models`。
 2. 合并不同密钥能看到的目录，并保留过去发现、后来下线的模型。
 3. 对目录中的每个模型真实调用 `/v1/chat/completions`，不再只靠模型名称猜测它是否可用。
-4. 用一次固定、无知识偏向的流式输出任务同时测量：
-   - 是否可请求；
-   - 首 Token 延迟（TTFT）；
-   - 总响应时间；
-   - 生成吞吐；
-   - 是否精确复现固定 payload。
+4. 使用三阶段、互不混分的测试套件：
+   - **Health**：极短标记回复，判断聊天接口是否真的可请求，并测量 TTFT 与响应时间；
+   - **Throughput**：固定目标 128 output tokens；只有 API 报告至少 116 tokens（90%）的结果才进入 TPS 榜；
+   - **Capability**：对 8 条内嵌记录执行筛选、计算、排序和校验码生成，返回严格 JSON，由本地代码按 7 项条件计 0–100 分。
 5. 更新 `history.db`、排行榜和公开静态端点，再部署到 GitHub Pages。
+
+吞吐使用 NVIDIA API 返回的真实 `completion_tokens`，不再用词数估算 token。若流式端点不返回 usage，只记录明确标注的字符吞吐用于诊断，不会把它当成 TPS。能力测试不依赖联网知识，也不调用另一个模型充当裁判，因而每次可重复、可审计。
 
 模型会显示为 `AVAILABLE`、`GONE`、`UNAUTHORIZED`、`RATE_LIMITED`、`TIMEOUT`、`ERROR`、`STALE` 或 `UNKNOWN`。`AVAILABLE` 必须来自真实成功响应；仅出现在模型目录中不会被当作可用。
 
@@ -50,7 +50,9 @@ NIM_MAX_IN_FLIGHT=40
 BATCH_SIZE=0
 INCLUDE_ALL_CATALOG_MODELS=1
 REQUEST_TIMEOUT_SECONDS=90
-BENCHMARK_MAX_TOKENS=192
+HEALTH_MAX_TOKENS=24
+THROUGHPUT_MAX_TOKENS=128
+CAPABILITY_MAX_TOKENS=384
 STALE_AFTER_MINUTES=180
 ```
 
@@ -76,6 +78,7 @@ STALE_AFTER_MINUTES=180
 | 综合最佳 | [`/top/`](https://xiaoqianran.github.io/NIMStats/top/) | [`/top/model`](https://xiaoqianran.github.io/NIMStats/top/model) |
 | 速度最佳 | [`/top/speed`](https://xiaoqianran.github.io/NIMStats/top/speed) | [`/top/speed/model`](https://xiaoqianran.github.io/NIMStats/top/speed/model) |
 | Intelligence 最佳 | [`/top/intelligence`](https://xiaoqianran.github.io/NIMStats/top/intelligence) | [`/top/intelligence/model`](https://xiaoqianran.github.io/NIMStats/top/intelligence/model) |
+| 本地能力题最佳 | [`/top/capability`](https://xiaoqianran.github.io/NIMStats/top/capability) | [`/top/capability/model`](https://xiaoqianran.github.io/NIMStats/top/capability/model) |
 
 也可以使用显式文件路径，例如 `top/speed.json` 和 `top/speed.txt`。
 

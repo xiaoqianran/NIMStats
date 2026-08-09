@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Rolling NIM fleet monitor — one small batch per GitHub Actions run.
+"""Rolling NIM fleet monitor with separated health, speed, and capability tests.
 
 Strategy:
   catalog → chat filter → stable sorted fleet → take next BATCH_SIZE models
-  (0 means the whole fleet). Each model gets one deterministic streaming call
-  that measures availability, TTFT, end-to-end latency, and decode throughput.
-  Requests run concurrently across a per-key 40 RPM pool. Writes history.db and
-  advances the cursor; the workflow deploys Pages after each completed run.
+  (0 means the whole fleet). Every catalog model receives a tiny availability
+  probe. Successful chat models then receive controlled-throughput and locally
+  graded capability workloads. Requests run concurrently across a per-key 40
+  RPM pool. Writes history.db and advances the cursor; the workflow deploys
+  Pages after each completed run.
 """
 
 from __future__ import annotations
@@ -42,6 +43,16 @@ from db_utils import (  # noqa: E402
     STALE_AFTER_MINUTES,
 )
 from api_key_pool import ApiKeyPool, load_api_keys  # noqa: E402
+from benchmark_suite import (  # noqa: E402
+    BENCHMARK_VERSION,
+    CAPABILITY_PROMPT,
+    HEALTH_MARKER,
+    HEALTH_PROMPT,
+    THROUGHPUT_MIN_VALID_TOKENS,
+    THROUGHPUT_PROMPT,
+    THROUGHPUT_TARGET_TOKENS,
+    grade_capability_response,
+)
 from model_catalog import get_benchmark_models  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -49,29 +60,23 @@ ROOT = SCRIPT_DIR.parent
 FLEET_OUT = SCRIPT_DIR / "fleet_snapshot.json"
 RESULTS_OUT = SCRIPT_DIR / "results.json"
 
-# A single fixed payload makes results more comparable than asking models to
-# count or write code. It is long enough for useful decode throughput while
-# requiring no knowledge, reasoning, localization, or safety judgement.
-BENCHMARK_PAYLOAD = (
-    "amber apple autumn baker beach birch blue breeze brook candle cedar circle "
-    "cloud coral dawn delta dune earth ember field flame forest frost garden "
-    "glass gold grain green harbor hazel hill honey iris ivory jade lake leaf "
-    "lemon light lilac linen maple meadow mist moon moss north oak ocean olive "
-    "orange pearl pine plum quartz rain river rose silver sky snow south spring "
-    "stone summer tide trail violet water west willow wind winter"
-)
-BENCHMARK_PROMPT = os.getenv(
-    "BENCHMARK_PROMPT",
-    "This is a deterministic transport benchmark, not a question. Copy the "
-    "payload between <payload> and </payload> exactly once. Return only the "
-    "payload: no tags, explanation, Markdown, quotation marks, or leading or "
-    f"trailing text.\n<payload>\n{BENCHMARK_PAYLOAD}\n</payload>",
+BENCHMARK_PROMPT = "\n\n".join(
+    (
+        f"benchmark_version={BENCHMARK_VERSION}",
+        f"[health]\n{HEALTH_PROMPT}",
+        f"[throughput]\n{THROUGHPUT_PROMPT}",
+        f"[capability]\n{CAPABILITY_PROMPT}",
+    )
 )
 
 API_BASE = os.getenv("API_BASE", "https://integrate.api.nvidia.com/v1").rstrip("/")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "0"))  # 0 = whole fleet
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "90"))
-BENCHMARK_MAX_TOKENS = int(os.getenv("BENCHMARK_MAX_TOKENS", "192"))
+HEALTH_MAX_TOKENS = int(os.getenv("HEALTH_MAX_TOKENS", "24"))
+THROUGHPUT_MAX_TOKENS = int(
+    os.getenv("THROUGHPUT_MAX_TOKENS", str(THROUGHPUT_TARGET_TOKENS))
+)
+CAPABILITY_MAX_TOKENS = int(os.getenv("CAPABILITY_MAX_TOKENS", "384"))
 
 
 def _load_dotenv() -> None:
@@ -115,21 +120,24 @@ def decode_tps(
     completion_tokens: int | None,
     response_ms: int | None,
     ttft_ms: int | None,
-    *,
-    content: str | None = None,
 ) -> float | None:
-    """Prefer completion_tokens / (response_time - TTFT) in seconds."""
-    tokens = completion_tokens
-    if not tokens and content:
-        # rough fallback: ~1.3 tokens/word when provider omits usage
-        words = len(content.split())
-        tokens = max(1, int(words * 1.3)) if words else None
-    if not tokens or not response_ms or response_ms <= 0:
+    """Provider token usage divided by decode phase; never estimate tokens."""
+    if not completion_tokens or not response_ms or response_ms <= 0:
         return None
     gen_ms = response_ms - (ttft_ms or 0)
     if gen_ms <= 0:
         gen_ms = response_ms
-    return round(tokens / (gen_ms / 1000.0), 4)
+    return round(completion_tokens / (gen_ms / 1000.0), 4)
+
+
+def chars_per_second(content: str | None, response_ms: int | None, ttft_ms: int | None) -> float | None:
+    """Tokenizer-independent diagnostic fallback, explicitly not called TPS."""
+    if not content or not response_ms or response_ms <= 0:
+        return None
+    gen_ms = response_ms - (ttft_ms or 0)
+    if gen_ms <= 0:
+        gen_ms = response_ms
+    return round(len(content) / (gen_ms / 1000.0), 4)
 
 
 def _parse_error_body(body: str, code: int) -> str:
@@ -163,6 +171,7 @@ def chat_completion(
     stream: bool,
     key_pool: ApiKeyPool,
     preferred_key_indexes: list[int] | None = None,
+    extra_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One API call using a rate-limited key from the shared pool."""
     api_key_index, api_key = key_pool.acquire_with_index(preferred_key_indexes)
@@ -173,6 +182,8 @@ def chat_completion(
         "max_tokens": max_tokens,
         "stream": stream,
     }
+    if extra_payload:
+        payload.update(extra_payload)
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         f"{API_BASE}/chat/completions",
@@ -248,8 +259,10 @@ def chat_completion(
                     "timeToFirstToken": ttft_ms,
                     "tokensGenerated": completion_tokens or None,
                     "totalTokens": total_tokens or None,
-                    "response": content[:500] if content else None,
-                    "visibleResponse": visible_content[:500] if visible_content else None,
+                    "response": content[:1000] if content else None,
+                    "visibleResponse": visible_content[:1000] if visible_content else None,
+                    "responseFull": content or None,
+                    "visibleResponseFull": visible_content or None,
                     "apiKeyIndex": api_key_index,
                     "error": None if ok else "No content in stream response",
                 }
@@ -279,8 +292,10 @@ def chat_completion(
                 "timeToFirstToken": None,  # non-stream has no true TTFT
                 "tokensGenerated": ct or None,
                 "totalTokens": tt or None,
-                "response": str(content)[:500] if content else None,
-                "visibleResponse": str(content)[:500] if content else None,
+                "response": str(content)[:1000] if content else None,
+                "visibleResponse": str(content)[:1000] if content else None,
+                "responseFull": str(content) if content else None,
+                "visibleResponseFull": str(content) if content else None,
                 "apiKeyIndex": api_key_index,
                 "error": None if ok else "Empty response",
             }
@@ -339,58 +354,147 @@ def run_model(
     key_pool: ApiKeyPool,
     preferred_key_indexes: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Run the unified availability + latency + throughput benchmark."""
-    print(f"  [benchmark] {model}", flush=True)
+    """Run health first, then speed and capability only for live chat models."""
+    print(f"  [suite] {model}", flush=True)
     candidate_indexes = list(
         dict.fromkeys(preferred_key_indexes or range(key_pool.key_count))
     )
     tried_indexes: set[int] = set()
-    result: dict[str, Any]
     while True:
         remaining = [index for index in candidate_indexes if index not in tried_indexes]
-        result = chat_completion(
+        health = chat_completion(
             model=model,
-            prompt=BENCHMARK_PROMPT,
-            max_tokens=BENCHMARK_MAX_TOKENS,
+            prompt=HEALTH_PROMPT,
+            max_tokens=HEALTH_MAX_TOKENS,
             stream=True,
             key_pool=key_pool,
             preferred_key_indexes=remaining,
         )
-        tried_indexes.add(result["apiKeyIndex"])
+        tried_indexes.add(health["apiKeyIndex"])
         # A catalog entry can be entitled for one account but not another.
         # Only declare it GONE after every key that listed it has returned GONE.
-        if result["status"] != STATUS_GONE or len(tried_indexes) >= len(candidate_indexes):
+        if health["status"] != STATUS_GONE or len(tried_indexes) >= len(candidate_indexes):
             break
 
-    response = result.get("visibleResponse") or result.get("response") or ""
+    health_response = health.get("visibleResponseFull") or health.get("responseFull") or ""
     row = {
         "model": model,
-        "testKind": "throughput",
-        "success": result["success"],
-        "status": result["status"],
-        "httpStatus": result.get("httpStatus"),
-        "error": result.get("error"),
-        "responseTime": result.get("responseTime"),
-        "timeToFirstToken": result.get("timeToFirstToken"),
-        "tokensGenerated": result.get("tokensGenerated"),
-        "totalTokens": result.get("totalTokens"),
-        "decodeTps": decode_tps(
-            result.get("tokensGenerated"),
-            result.get("responseTime"),
-            result.get("timeToFirstToken"),
-            content=response,
-        ),
-        "response": response or None,
-        "responseMatchesPayload": response.strip() == BENCHMARK_PAYLOAD,
+        "testKind": "suite-v3",
+        "benchmarkVersion": BENCHMARK_VERSION,
+        "success": health["success"],
+        "status": health["status"],
+        "httpStatus": health.get("httpStatus"),
+        "error": health.get("error"),
+        "responseTime": health.get("responseTime"),
+        "timeToFirstToken": health.get("timeToFirstToken"),
+        "response": health_response[:1000] or None,
+        "healthMarkerExact": health_response.strip() == HEALTH_MARKER,
+        "tokensGenerated": None,
+        "totalTokens": None,
+        "decodeTps": None,
+        "charsPerSecond": None,
+        "throughputValid": False,
+        "throughputResponseTime": None,
+        "throughputTtft": None,
+        "throughputMode": None,
+        "capabilityScore": None,
+        "capabilityPass": False,
+        "formatPass": False,
+        "capabilityChecks": None,
         "keyAttempts": len(tried_indexes),
     }
-    mark = "OK" if result["success"] else result["status"]
-    compliance = "exact" if row["responseMatchesPayload"] else "non-exact"
+
+    if health["success"]:
+        preferred = [health["apiKeyIndex"]]
+        throughput = chat_completion(
+            model=model,
+            prompt=THROUGHPUT_PROMPT,
+            max_tokens=THROUGHPUT_MAX_TOKENS,
+            stream=True,
+            key_pool=key_pool,
+            preferred_key_indexes=preferred,
+            extra_payload={
+                "ignore_eos": True,
+                "stream_options": {"include_usage": True},
+            },
+        )
+        throughput_mode = "fixed-osl"
+        if throughput.get("httpStatus") in (400, 422):
+            throughput = chat_completion(
+                model=model,
+                prompt=THROUGHPUT_PROMPT,
+                max_tokens=THROUGHPUT_MAX_TOKENS,
+                stream=True,
+                key_pool=key_pool,
+                preferred_key_indexes=preferred,
+            )
+            throughput_mode = "compat"
+
+        throughput_response = (
+            throughput.get("visibleResponseFull")
+            or throughput.get("responseFull")
+            or ""
+        )
+        generated = throughput.get("tokensGenerated")
+        throughput_valid = bool(
+            throughput.get("success")
+            and generated is not None
+            and generated >= THROUGHPUT_MIN_VALID_TOKENS
+        )
+        row.update(
+            {
+                "tokensGenerated": generated,
+                "totalTokens": throughput.get("totalTokens"),
+                "throughputValid": throughput_valid,
+                "throughputResponseTime": throughput.get("responseTime"),
+                "throughputTtft": throughput.get("timeToFirstToken"),
+                "throughputMode": throughput_mode,
+                "decodeTps": decode_tps(
+                    generated,
+                    throughput.get("responseTime"),
+                    throughput.get("timeToFirstToken"),
+                ) if throughput_valid else None,
+                "charsPerSecond": chars_per_second(
+                    throughput_response,
+                    throughput.get("responseTime"),
+                    throughput.get("timeToFirstToken"),
+                ),
+                "throughputError": throughput.get("error"),
+            }
+        )
+
+        capability = chat_completion(
+            model=model,
+            prompt=CAPABILITY_PROMPT,
+            max_tokens=CAPABILITY_MAX_TOKENS,
+            stream=False,
+            key_pool=key_pool,
+            preferred_key_indexes=preferred,
+        )
+        capability_response = (
+            capability.get("visibleResponseFull")
+            or capability.get("responseFull")
+            or ""
+        )
+        grade = grade_capability_response(capability_response)
+        row.update(
+            {
+                "capabilityScore": grade["score"] if capability.get("success") else None,
+                "capabilityPass": grade["pass"] if capability.get("success") else False,
+                "formatPass": grade["formatPass"] if capability.get("success") else False,
+                "capabilityChecks": grade["checks"] if capability.get("success") else None,
+                "capabilityError": capability.get("error"),
+                "capabilityResponse": capability_response[:1000] or None,
+            }
+        )
+
+    mark = "OK" if health["success"] else health["status"]
     print(
-        f"    → {model} {mark} e2e={result.get('responseTime')}ms "
-        f"ttft={result.get('timeToFirstToken')} tok={result.get('tokensGenerated')} "
-        f"tps={row.get('decodeTps')} output={compliance} "
-        f"keys_tried={len(tried_indexes)} {result.get('error') or ''}",
+        f"    → {model} {mark} health={health.get('responseTime')}ms "
+        f"ttft={health.get('timeToFirstToken')} tok={row.get('tokensGenerated')} "
+        f"valid_osl={row.get('throughputValid')} tps={row.get('decodeTps')} "
+        f"suite={row.get('capabilityScore')} keys_tried={len(tried_indexes)} "
+        f"{health.get('error') or ''}",
         flush=True,
     )
     return row
@@ -452,7 +556,8 @@ def main() -> int:
                 all_rows.append(
                     {
                         "model": model,
-                        "testKind": "throughput",
+                        "testKind": "suite-v3",
+                        "benchmarkVersion": BENCHMARK_VERSION,
                         "success": False,
                         "status": STATUS_ERROR,
                         "error": f"Internal worker error: {type(exc).__name__}: {exc}",
@@ -471,7 +576,8 @@ def main() -> int:
             "batch_size": len(batch),
             "cursor_start": c_start,
             "cursor_end": c_end,
-            "kind": "rolling",
+            "kind": "suite-v3",
+            "benchmark_version": BENCHMARK_VERSION,
         },
     )
 
@@ -480,13 +586,15 @@ def main() -> int:
     set_state(conn, "cursor", str(new_cursor))
     set_state(conn, "last_batch_at", timestamp)
     set_state(conn, "last_run_id", str(run_id))
+    set_state(conn, "benchmark_version", BENCHMARK_VERSION)
     set_state(conn, "stale_after_minutes", str(STALE_AFTER_MINUTES))
     conn.commit()
     conn.close()
 
     # Summaries
     successful = [r for r in all_rows if r.get("success")]
-    exact = [r for r in successful if r.get("responseMatchesPayload")]
+    valid_throughput = [r for r in successful if r.get("throughputValid")]
+    capability_passes = [r for r in successful if r.get("capabilityPass")]
     by_status: dict[str, int] = {}
     for r in all_rows:
         st = r.get("status") or STATUS_ERROR
@@ -501,7 +609,11 @@ def main() -> int:
         "fleetSize": len(fleet),
         "byStatus": by_status,
         "successCount": len(successful),
-        "exactPayloadCount": len(exact),
+        "validThroughputCount": len(valid_throughput),
+        "capabilityPassCount": len(capability_passes),
+        "benchmarkVersion": BENCHMARK_VERSION,
+        "throughputTargetTokens": THROUGHPUT_TARGET_TOKENS,
+        "throughputMinValidTokens": THROUGHPUT_MIN_VALID_TOKENS,
         "catalog": catalog_meta,
         "rateLimitRpm": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "40")),
         "apiKeyCount": key_pool.key_count,

@@ -1,6 +1,6 @@
 name: Rolling NIM Benchmark
 
-# Full-fleet monitor. A key pool makes one deterministic request per model.
+# Full-fleet monitor. Every model gets health; live chat models get speed + capability.
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Full-fleet catalog + unified streaming benchmark
+      - name: Full-fleet catalog + three-stage benchmark suite
         env:
           NIM_API_KEYS: ${{ secrets.NIM_API_KEYS }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
@@ -34,7 +34,9 @@ jobs:
           INCLUDE_ALL_CATALOG_MODELS: "1"
           REQUEST_TIMEOUT_SECONDS: "90"
           STALE_AFTER_MINUTES: "180"
-          BENCHMARK_MAX_TOKENS: "192"
+          HEALTH_MAX_TOKENS: "24"
+          THROUGHPUT_MAX_TOKENS: "128"
+          CAPABILITY_MAX_TOKENS: "384"
         run: python3 -u scripts/rolling_bench.py
 
       - name: Update Artificial Analysis intelligence scores

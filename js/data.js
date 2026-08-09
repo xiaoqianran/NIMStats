@@ -49,12 +49,15 @@ function loadFromDb(db) {
   try {
     const mq = db.exec(
       `SELECT name, intelligence_score, current_status, last_checked_at, last_success_at,
-              last_http_status, last_error, last_ttft_ms, last_latency_ms, last_decode_tps
+              last_http_status, last_error, last_ttft_ms, last_latency_ms, last_decode_tps,
+              last_throughput_valid, last_chars_per_second, last_capability_score,
+              last_capability_pass, last_benchmark_version
        FROM models ORDER BY name`
     );
     if (mq.length && mq[0].values.length) {
       for (const row of mq[0].values) {
-        const [name, intel, cur, checked, successAt, httpSt, err, ttft, lat, tps] = row;
+        const [name, intel, cur, checked, successAt, httpSt, err, ttft, lat, tps,
+          throughputValid, charsPerSecond, capabilityScore, capabilityPass, benchmarkVersion] = row;
         modelMeta[name] = {
           intelligence: intel != null ? intel : 50.0,
           currentStatus: cur || 'UNKNOWN',
@@ -66,6 +69,11 @@ function loadFromDb(db) {
           lastTtftMs: ttft,
           lastLatencyMs: lat,
           lastDecodeTps: tps,
+          lastThroughputValid: throughputValid === 1,
+          lastCharsPerSecond: charsPerSecond,
+          capabilityScore,
+          capabilityPass: capabilityPass === 1,
+          benchmarkVersion,
         };
       }
     }
@@ -104,7 +112,10 @@ function loadFromDb(db) {
   try {
     resQ = db.exec(
       `SELECT mr.run_id, m.name, mr.success, e.text, mr.response_time, mr.tokens_generated,
-              mr.total_tokens, mr.time_to_first_token, mr.status, mr.http_status, mr.test_kind, mr.decode_tps
+              mr.total_tokens, mr.time_to_first_token, mr.status, mr.http_status, mr.test_kind, mr.decode_tps,
+              mr.throughput_valid, mr.chars_per_second, mr.capability_score,
+              mr.capability_pass, mr.format_pass, mr.benchmark_version,
+              mr.throughput_latency_ms, mr.throughput_ttft_ms
        FROM model_results mr
        JOIN models m ON mr.model_id = m.id
        LEFT JOIN errors e ON mr.error_id = e.id
@@ -137,6 +148,14 @@ function loadFromDb(db) {
       const httpStatus = row[9] != null ? row[9] : null;
       const testKind = row[10] != null ? row[10] : 'legacy';
       const dps = row[11] != null ? row[11] : null;
+      const throughputValid = row[12] === 1;
+      const charsPerSecond = row[13] != null ? row[13] : null;
+      const capabilityScore = row[14] != null ? row[14] : null;
+      const capabilityPass = row[15] === 1;
+      const formatPass = row[16] === 1;
+      const benchmarkVersion = row[17] != null ? row[17] : null;
+      const throughputLatency = row[18] != null ? row[18] : null;
+      const throughputTtft = row[19] != null ? row[19] : null;
       const key = `${run_id}||${model}`;
       const cand = {
         model,
@@ -149,7 +168,15 @@ function loadFromDb(db) {
         status,
         httpStatus,
         testKind,
-        decodeTps: dps != null ? dps : decodeTps(tg, rt, ttft),
+        decodeTps: throughputValid && dps != null ? dps : null,
+        throughputValid,
+        charsPerSecond,
+        capabilityScore,
+        capabilityPass,
+        formatPass,
+        benchmarkVersion,
+        throughputLatency,
+        throughputTtft,
       };
       const prev = bucket.get(key);
       if (!prev) {
@@ -159,7 +186,7 @@ function loadFromDb(db) {
       // Prefer successful throughput > successful health > any
       const rank = (r) =>
         (r.success ? 4 : 0) +
-        (r.testKind === 'throughput' ? 2 : r.testKind === 'health' ? 1 : 0);
+        (r.testKind === 'suite-v3' ? 3 : r.testKind === 'throughput' ? 2 : r.testKind === 'health' ? 1 : 0);
       if (rank(cand) >= rank(prev)) bucket.set(key, cand);
     }
   }
@@ -195,8 +222,12 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
     const times = successes.map((r) => r.responseTime).filter((t) => t > 0);
     const ttftArr = successes.map((r) => r.timeToFirstToken).filter((t) => t != null && t > 0);
     const tpsArr = successes
-      .map((r) => r.decodeTps != null ? r.decodeTps : decodeTps(r.tokensGenerated, r.responseTime, r.timeToFirstToken))
+      .filter((r) => r.throughputValid)
+      .map((r) => r.decodeTps)
       .filter((t) => t != null && t > 0);
+    const capabilityArr = results
+      .map((r) => r?.capabilityScore)
+      .filter((score) => score != null);
 
     const meta = modelMeta[model] || {};
     modelStats[model] = {
@@ -207,15 +238,17 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
       uptime: testedResults.length ? successes.length / testedResults.length : 0,
       responseTimes: results.map((r) => (r && r.success && r.responseTime > 0 ? r.responseTime : null)),
       throughputs: results.map((r) => {
-        if (!(r && r.success)) return null;
-        return r.decodeTps != null
-          ? r.decodeTps
-          : decodeTps(r.tokensGenerated, r.responseTime, r.timeToFirstToken);
+        if (!(r && r.success && r.throughputValid)) return null;
+        return r.decodeTps != null ? r.decodeTps : null;
       }),
       avgTime: times.length ? avg(times) : null,
       bestTime: times.length ? Math.min(...times) : null,
       avgTtft: ttftArr.length ? avg(ttftArr) : (meta.lastTtftMs || null),
-      avgTps: tpsArr.length ? avg(tpsArr) : (meta.lastDecodeTps || null),
+      avgTps: tpsArr.length ? avg(tpsArr) : (meta.lastThroughputValid ? meta.lastDecodeTps : null),
+      capabilityScore: capabilityArr.length ? avg(capabilityArr) : (meta.capabilityScore ?? null),
+      capabilityPass: meta.capabilityPass || false,
+      charsPerSecond: meta.lastCharsPerSecond || null,
+      benchmarkVersion: meta.benchmarkVersion || null,
       wins: 0,
       errors: {},
       lastSeen: meta.lastSuccessAt || null,
@@ -266,8 +299,9 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
     s.speedScore = speedScore;
     s.tpsScore = tpsScore;
     const intel = s.intelligence != null ? s.intelligence : 50;
-    // reliability from historical uptime; intelligence external; speed+throughput
-    s.score = Math.round(s.uptime * 30 + speedScore * 0.2 + tpsScore * 0.2 + (intel / 100) * 30);
+    const suite = s.capabilityScore != null ? s.capabilityScore : 0;
+    // Local verifiable suite is kept distinct from the external intelligence index.
+    s.score = Math.round(s.uptime * 25 + speedScore * 0.15 + tpsScore * 0.15 + suite * 0.2 + (intel / 100) * 25);
 
     const half = Math.floor(s.responseTimes.length / 2);
     const firstHalf = s.responseTimes.slice(0, half).filter((v) => v != null);

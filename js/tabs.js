@@ -352,6 +352,7 @@ function renderLbTable() {
       <td><div class="score-cell"><span class="score-num" style="color:${scoreVar}">${r.score}</span></div></td>
       <td><span style="font-size:10px;font-weight:700;color:${statusColor};font-family:'JetBrains Mono'">${dStatus}</span></td>
       <td><div class="uptime-cell"><span class="uptime-val" style="color:${colorVar}">${uptimePct}%</span><div class="uptime-bar"><div class="uptime-fill" style="width:${uptimePct}%;background:${colorVar}"></div></div></div></td>
+      <td class="mono" style="font-weight:700;color:var(--success)">${r.capabilityScore != null ? r.capabilityScore.toFixed(0) : '—'}</td>
       <td class="mono" style="font-weight:600;color:var(--blue)">${r.intelligence ? r.intelligence.toFixed(0) : '—'}</td>
       <td class="mono">${r.avgTime ? (r.avgTime/1000).toFixed(2)+'s' : '—'}</td>
       <td class="mono" style="color:var(--warning)">${r.avgTtft ? r.avgTtft.toFixed(0)+'ms' : '—'}</td>
@@ -418,6 +419,7 @@ function renderExplorer() {
   const uptimeColor = s.uptime >= 0.7 ? 'var(--success)' : s.uptime >= 0.4 ? 'var(--warning)' : 'var(--danger)';
   document.getElementById('explorer-stats').innerHTML = `
     <div class="stat-card"><div class="stat-val" style="color:${uptimeColor}">${(s.uptime*100).toFixed(1)}%</div><div class="stat-label">Uptime</div><div class="stat-sub">${s.successCount}/${s.totalRuns} runs</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:var(--success)">${s.capabilityScore != null ? s.capabilityScore.toFixed(0) : '—'}</div><div class="stat-label">Local Suite</div><div class="stat-sub">Programmatic / 100</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--purple)">${s.intelligence ? s.intelligence.toFixed(0) : '—'}</div><div class="stat-label">Intel Index</div><div class="stat-sub">Artificial Analysis</div></div>
     <div class="stat-card"><div class="stat-val">${s.avgTime ? (s.avgTime/1000).toFixed(2)+'s' : '—'}</div><div class="stat-label">Avg Response</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--warning)">${s.avgTtft ? s.avgTtft.toFixed(0)+'ms' : '—'}</div><div class="stat-label">Avg TTFT</div><div class="stat-sub">Time to 1st Token</div></div>
