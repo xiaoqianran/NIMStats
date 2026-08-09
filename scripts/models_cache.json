@@ -1,6 +1,6 @@
 {
-  "fetched_at": "2026-08-09T15:34:44Z",
-  "source": "remote-pool",
+  "fetched_at": "2026-08-09T16:11:58Z",
+  "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 100,
   "models": [
