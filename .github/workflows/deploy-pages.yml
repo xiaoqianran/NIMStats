@@ -1,7 +1,10 @@
 name: Deploy GitHub Pages
 
-# Pages 源选 "GitHub Actions" 后，由此 workflow 发布静态看板
 on:
+  # Backup path: when rolling finishes (covers cases where push-triggered deploy is skipped)
+  workflow_run:
+    workflows: ["Rolling NIM Benchmark"]
+    types: [completed]
   push:
     branches: [main]
     paths:
@@ -10,12 +13,9 @@ on:
       - "js/**"
       - "top/**"
       - "history.db"
-      - "scripts/fleet_snapshot.json"
       - "favicon.svg"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
-  # 方便 benchmark 更新 history.db 后手动/链式触发；
-  # benchmark job 推 main 时若改了 history.db 也会走上面的 push paths
 
 permissions:
   contents: read
@@ -28,6 +28,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Skip failed rolling runs when triggered via workflow_run
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -35,6 +37,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # For workflow_run, checkout the commit that finished (may be newer main)
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -44,13 +49,14 @@ jobs:
           set -euo pipefail
           rm -rf _site
           mkdir -p _site
-          # dashboard surface only — do not ship scripts/, .env, keys
           cp index.html favicon.svg _site/
           [ -f history.db ] && cp history.db _site/
           cp -r css js _site/
           if [ -d top ]; then cp -r top _site/; fi
-          if [ -f scripts/fleet_snapshot.json ]; then mkdir -p _site/scripts && cp scripts/fleet_snapshot.json _site/scripts/; fi
-          # optional SEO / verification files at root
+          if [ -f scripts/fleet_snapshot.json ]; then
+            mkdir -p _site/scripts
+            cp scripts/fleet_snapshot.json _site/scripts/
+          fi
           for f in google*.html robots.txt; do
             [ -f "$f" ] && cp "$f" _site/ || true
           done
