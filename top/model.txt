@@ -1,1 +1,1 @@
-mistralai/mistral-nemotron
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
