@@ -21,7 +21,12 @@ from build_pages import build_site  # noqa: E402
 from db_utils import sanitize_error, write_rolling_batch  # noqa: E402
 from model_catalog import classify_model, is_chat_model, refresh_models  # noqa: E402
 from rate_limiter import RateLimiter  # noqa: E402
-from rolling_bench import build_stage_jobs, next_batch, run_model  # noqa: E402
+from rolling_bench import (  # noqa: E402
+    build_stage_jobs,
+    chat_completion,
+    next_batch,
+    run_model,
+)
 
 
 class FakeTime:
@@ -118,6 +123,20 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(batch, ["b", "c", "a"])
         self.assertEqual((start, end, cursor), (1, 4, 1))
 
+    def test_network_timeout_is_reported_as_timeout(self) -> None:
+        pool = ApiKeyPool(["test-key"], max_per_minute=1_000_000)
+        with patch("rolling_bench.urllib.request.urlopen", side_effect=TimeoutError("deadline")):
+            result = chat_completion(
+                model="org/model",
+                prompt="test",
+                max_tokens=8,
+                stream=True,
+                key_pool=pool,
+                timeout_seconds=1,
+            )
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status"], "TIMEOUT")
+
     def test_long_generation_uses_objective_completion_diagnostics(self) -> None:
         response = "\n\n".join(
             f"<<<FILE:{path}>>>\n// complete {path}\n<<<END_FILE>>>"
@@ -174,6 +193,10 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(row["longFilesComplete"], 6)
         self.assertTrue(row["longOutputComplete"])
         self.assertNotIn("capabilityScore", row)
+        long_call = completion.call_args_list[-1].kwargs
+        self.assertTrue(long_call["stream"])
+        self.assertNotIn("ignore_eos", long_call["extra_payload"])
+        self.assertNotIn("top_p", long_call["extra_payload"])
 
     def test_latest_long_response_is_stored_without_historical_duplication(self) -> None:
         base_row = {

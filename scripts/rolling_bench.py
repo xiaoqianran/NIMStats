@@ -415,8 +415,6 @@ def run_stage(model: str, stage: str, key_pool: ApiKeyPool) -> dict[str, Any]:
             key_pool=key_pool,
             timeout_seconds=LONG_TASK_TIMEOUT,
             extra_payload={
-                "temperature": 0.2,
-                "top_p": 0.9,
                 "stream_options": {"include_usage": True},
             },
         )
