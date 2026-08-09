@@ -1,16 +1,16 @@
 {
   "best_model": "meta/llama-3.1-8b-instruct",
   "provider": "meta",
-  "score": 85,
+  "score": 86,
   "intelligence": null,
   "uptime": 100.0,
-  "avg_response_time_ms": 544.7142857142857,
-  "best_response_time_ms": 291,
-  "avg_time_to_first_token_ms": 374.7,
-  "avg_throughput_tps": 159.8,
-  "total_runs": 21,
-  "success_count": 21,
-  "wins": 1,
-  "last_seen": "2026-08-09T19:06:50Z",
-  "generated_at": "2026-08-09T19:06:50Z"
+  "avg_response_time_ms": 531.4545454545455,
+  "best_response_time_ms": 253,
+  "avg_time_to_first_token_ms": 367.4,
+  "avg_throughput_tps": 161.8,
+  "total_runs": 22,
+  "success_count": 22,
+  "wins": 2,
+  "last_seen": "2026-08-09T19:13:41Z",
+  "generated_at": "2026-08-09T19:13:41Z"
 }
