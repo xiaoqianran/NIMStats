@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Full-fleet catalog + three-stage benchmark suite
+      - name: Full-fleet catalog + four-call benchmark suite
         env:
           NIM_API_KEYS: ${{ secrets.NIM_API_KEYS }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
@@ -36,7 +36,8 @@ jobs:
           STALE_AFTER_MINUTES: "180"
           HEALTH_MAX_TOKENS: "24"
           THROUGHPUT_MAX_TOKENS: "128"
-          CAPABILITY_MAX_TOKENS: "384"
+          LONG_TASK_MAX_TOKENS: "3072"
+          LONG_TASK_TIMEOUT_SECONDS: "300"
         run: python3 -u scripts/rolling_bench.py
 
       - name: Update Artificial Analysis intelligence scores

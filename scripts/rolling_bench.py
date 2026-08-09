@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Rolling NIM fleet monitor with separated health, speed, and capability tests.
+"""Rolling NIM fleet monitor with health, speed, and long-generation tests.
 
 Strategy:
   catalog → chat filter → stable sorted fleet → take next BATCH_SIZE models
   (0 means the whole fleet). Every catalog model receives exactly four calls:
-  health, two controlled-throughput samples, and one locally graded capability
-  workload. Requests run concurrently across a per-key 40
+  health, two controlled-throughput samples, and one natural-stop Next.js
+  generation workload. Requests run concurrently across a per-key 40
   RPM pool. Writes history.db and advances the cursor; the workflow deploys
   Pages after each completed run.
 """
@@ -46,13 +46,13 @@ from db_utils import (  # noqa: E402
 from api_key_pool import ApiKeyPool, load_api_keys  # noqa: E402
 from benchmark_suite import (  # noqa: E402
     BENCHMARK_VERSION,
-    CAPABILITY_PROMPT,
     HEALTH_MARKER,
     HEALTH_PROMPT,
+    LONG_TASK_PROMPT,
     THROUGHPUT_MIN_VALID_TOKENS,
     THROUGHPUT_PROMPT,
     THROUGHPUT_TARGET_TOKENS,
-    grade_capability_response,
+    analyze_long_response,
 )
 from model_catalog import get_benchmark_models  # noqa: E402
 
@@ -66,7 +66,7 @@ BENCHMARK_PROMPT = "\n\n".join(
         f"benchmark_version={BENCHMARK_VERSION}",
         f"[health]\n{HEALTH_PROMPT}",
         f"[throughput]\n{THROUGHPUT_PROMPT}",
-        f"[capability]\n{CAPABILITY_PROMPT}",
+        f"[long-generation]\n{LONG_TASK_PROMPT}",
     )
 )
 
@@ -77,7 +77,8 @@ HEALTH_MAX_TOKENS = int(os.getenv("HEALTH_MAX_TOKENS", "24"))
 THROUGHPUT_MAX_TOKENS = int(
     os.getenv("THROUGHPUT_MAX_TOKENS", str(THROUGHPUT_TARGET_TOKENS))
 )
-CAPABILITY_MAX_TOKENS = int(os.getenv("CAPABILITY_MAX_TOKENS", "384"))
+LONG_TASK_MAX_TOKENS = int(os.getenv("LONG_TASK_MAX_TOKENS", "3072"))
+LONG_TASK_TIMEOUT = int(os.getenv("LONG_TASK_TIMEOUT_SECONDS", "300"))
 
 
 def _load_dotenv() -> None:
@@ -173,6 +174,7 @@ def chat_completion(
     key_pool: ApiKeyPool,
     preferred_key_indexes: list[int] | None = None,
     extra_payload: dict[str, Any] | None = None,
+    timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     """One API call using a rate-limited key from the shared pool."""
     api_key_index, api_key = key_pool.acquire_with_index(preferred_key_indexes)
@@ -197,17 +199,21 @@ def chat_completion(
             "User-Agent": "NIMStats-rolling/2.0",
         },
     )
+    timeout = timeout_seconds or REQUEST_TIMEOUT
     started = time.perf_counter()
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    ttft_ms: int | None = None
+    completion_tokens = 0
+    total_tokens = 0
+    finish_reason: str | None = None
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             http_status = getattr(resp, "status", 200) or 200
             if stream:
-                content_parts: list[str] = []
-                reasoning_parts: list[str] = []
-                ttft_ms: int | None = None
-                completion_tokens = 0
-                total_tokens = 0
                 for raw_line in resp:
+                    if time.perf_counter() - started > timeout:
+                        raise TimeoutError(f"total request time exceeded {timeout}s")
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data: "):
                         continue
@@ -220,6 +226,8 @@ def chat_completion(
                         continue
                     choices = chunk.get("choices") or []
                     if choices:
+                        if choices[0].get("finish_reason") is not None:
+                            finish_reason = str(choices[0]["finish_reason"])
                         delta = choices[0].get("delta") or {}
                         content_text = delta.get("content") or ""
                         reasoning_text = (
@@ -264,6 +272,7 @@ def chat_completion(
                     "visibleResponse": visible_content[:1000] if visible_content else None,
                     "responseFull": content or None,
                     "visibleResponseFull": visible_content or None,
+                    "finishReason": finish_reason,
                     "apiKeyIndex": api_key_index,
                     "error": None if ok else "No content in stream response",
                 }
@@ -274,6 +283,8 @@ def chat_completion(
             content = ""
             choices = data.get("choices") or []
             if choices:
+                if choices[0].get("finish_reason") is not None:
+                    finish_reason = str(choices[0]["finish_reason"])
                 msg = choices[0].get("message") or {}
                 content = (
                     msg.get("content")
@@ -297,6 +308,7 @@ def chat_completion(
                 "visibleResponse": str(content)[:1000] if content else None,
                 "responseFull": str(content) if content else None,
                 "visibleResponseFull": str(content) if content else None,
+                "finishReason": finish_reason,
                 "apiKeyIndex": api_key_index,
                 "error": None if ok else "Empty response",
             }
@@ -321,16 +333,30 @@ def chat_completion(
     except Exception as exc:  # noqa: BLE001
         latency = int((time.perf_counter() - started) * 1000)
         msg = str(exc)
-        status = STATUS_TIMEOUT if "timed out" in msg.lower() or "timeout" in msg.lower() else STATUS_ERROR
+        status = (
+            STATUS_TIMEOUT
+            if isinstance(exc, TimeoutError)
+            or "timed out" in msg.lower()
+            or "timeout" in msg.lower()
+            or "time exceeded" in msg.lower()
+            else STATUS_ERROR
+        )
+        visible_content = "".join(content_parts)
+        reasoning_content = "".join(reasoning_parts)
+        partial_content = visible_content or reasoning_content
         return {
             "success": False,
             "status": status,
             "httpStatus": None,
             "responseTime": latency,
             "timeToFirstToken": None,
-            "tokensGenerated": None,
-            "totalTokens": None,
-            "response": None,
+            "tokensGenerated": completion_tokens or None,
+            "totalTokens": total_tokens or None,
+            "response": partial_content[:1000] if partial_content else None,
+            "visibleResponse": visible_content[:1000] if visible_content else None,
+            "responseFull": partial_content or None,
+            "visibleResponseFull": visible_content or None,
+            "finishReason": finish_reason,
             "error": f"{type(exc).__name__}: {exc}",
             "apiKeyIndex": api_key_index,
         }
@@ -350,7 +376,7 @@ def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str
     return batch, start, (start + batch_size), new_cursor
 
 
-STAGE_NAMES = ("health", "throughput-a", "throughput-b", "capability")
+STAGE_NAMES = ("health", "throughput-a", "throughput-b", "long-generation")
 
 
 def build_stage_jobs(models: list[str]) -> list[tuple[str, str]]:
@@ -380,13 +406,19 @@ def run_stage(model: str, stage: str, key_pool: ApiKeyPool) -> dict[str, Any]:
                 "stream_options": {"include_usage": True},
             },
         )
-    if stage == "capability":
+    if stage == "long-generation":
         return chat_completion(
             model=model,
-            prompt=CAPABILITY_PROMPT,
-            max_tokens=CAPABILITY_MAX_TOKENS,
-            stream=False,
+            prompt=LONG_TASK_PROMPT,
+            max_tokens=LONG_TASK_MAX_TOKENS,
+            stream=True,
             key_pool=key_pool,
+            timeout_seconds=LONG_TASK_TIMEOUT,
+            extra_payload={
+                "temperature": 0.2,
+                "top_p": 0.9,
+                "stream_options": {"include_usage": True},
+            },
         )
     raise ValueError(f"Unknown benchmark stage: {stage}")
 
@@ -407,9 +439,9 @@ def run_model(
         }
     health = stage_results["health"]
     throughput_results = [stage_results["throughput-a"], stage_results["throughput-b"]]
-    capability = stage_results["capability"]
+    long_generation = stage_results["long-generation"]
 
-    all_results = [health, *throughput_results, capability]
+    all_results = [health, *throughput_results, long_generation]
     successful_calls = [result for result in all_results if result.get("success")]
     available = bool(successful_calls)
     primary = health if health.get("success") else (successful_calls[0] if successful_calls else health)
@@ -460,15 +492,26 @@ def run_model(
         if sample[0].get("totalTokens") is not None
     ]
 
-    capability_response = (
-        capability.get("visibleResponseFull")
-        or capability.get("responseFull")
+    long_response = (
+        long_generation.get("visibleResponseFull")
+        or long_generation.get("responseFull")
         or ""
     )
-    grade = grade_capability_response(capability_response)
+    long_finish_reason = long_generation.get("finishReason")
+    long_diagnostics = analyze_long_response(long_response, long_finish_reason)
+    long_decode_tps = decode_tps(
+        long_generation.get("tokensGenerated"),
+        long_generation.get("responseTime"),
+        long_generation.get("timeToFirstToken"),
+    )
+    long_char_rate = chars_per_second(
+        long_response,
+        long_generation.get("responseTime"),
+        long_generation.get("timeToFirstToken"),
+    )
     row = {
         "model": model,
-        "testKind": "suite-v3",
+        "testKind": "suite-v4-longgen",
         "benchmarkVersion": BENCHMARK_VERSION,
         "success": available,
         "status": STATUS_AVAILABLE if available else health["status"],
@@ -488,12 +531,18 @@ def run_model(
         "throughputResponseTime": throughput_latency,
         "throughputTtft": throughput_ttft,
         "throughputMode": "fixed-osl",
-        "capabilityScore": grade["score"] if capability.get("success") else None,
-        "capabilityPass": grade["pass"] if capability.get("success") else False,
-        "formatPass": grade["formatPass"] if capability.get("success") else False,
-        "capabilityChecks": grade["checks"] if capability.get("success") else None,
-        "capabilityError": capability.get("error"),
-        "capabilityResponse": capability_response[:1000] or None,
+        "longSuccess": bool(long_generation.get("success")),
+        "longResponse": long_response or None,
+        "longFinishReason": long_finish_reason,
+        "longTokensGenerated": long_generation.get("tokensGenerated"),
+        "longTotalTokens": long_generation.get("totalTokens"),
+        "longResponseTime": long_generation.get("responseTime"),
+        "longTtft": long_generation.get("timeToFirstToken"),
+        "longDecodeTps": long_decode_tps,
+        "longCharsPerSecond": long_char_rate,
+        "longError": long_generation.get("error"),
+        "longMaxTokens": LONG_TASK_MAX_TOKENS,
+        **{f"long{key[0].upper()}{key[1:]}": value for key, value in long_diagnostics.items()},
         "requestCount": 4,
         "apiKeyIndexes": [result["apiKeyIndex"] for result in all_results],
     }
@@ -503,7 +552,9 @@ def run_model(
         f"health={row.get('responseTime')}ms ttft={row.get('timeToFirstToken')} "
         f"valid_samples={row.get('throughputSampleCount')}/2 "
         f"tps={row.get('decodeTps')} cv={row.get('throughputCv')} "
-        f"suite={row.get('capabilityScore')} {row.get('error') or ''}",
+        f"long={row.get('longTokensGenerated')}tok/{row.get('longResponseChars')}ch "
+        f"files={row.get('longFilesComplete')}/6 finish={row.get('longFinishReason')} "
+        f"{row.get('error') or ''}",
         flush=True,
     )
     return row
@@ -597,7 +648,7 @@ def main() -> int:
             "batch_size": len(batch),
             "cursor_start": c_start,
             "cursor_end": c_end,
-            "kind": "suite-v3",
+            "kind": "suite-v4-longgen",
             "benchmark_version": BENCHMARK_VERSION,
         },
     )
@@ -615,7 +666,7 @@ def main() -> int:
     # Summaries
     successful = [r for r in all_rows if r.get("success")]
     valid_throughput = [r for r in successful if r.get("throughputValid")]
-    capability_passes = [r for r in successful if r.get("capabilityPass")]
+    completed_long_outputs = [r for r in successful if r.get("longOutputComplete")]
     by_status: dict[str, int] = {}
     for r in all_rows:
         st = r.get("status") or STATUS_ERROR
@@ -631,7 +682,8 @@ def main() -> int:
         "byStatus": by_status,
         "successCount": len(successful),
         "validThroughputCount": len(valid_throughput),
-        "capabilityPassCount": len(capability_passes),
+        "longOutputCompleteCount": len(completed_long_outputs),
+        "longTaskMaxTokens": LONG_TASK_MAX_TOKENS,
         "benchmarkVersion": BENCHMARK_VERSION,
         "throughputTargetTokens": THROUGHPUT_TARGET_TOKENS,
         "throughputMinValidTokens": THROUGHPUT_MIN_VALID_TOKENS,

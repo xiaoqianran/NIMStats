@@ -16,15 +16,15 @@ GitHub Actions 默认每 5 分钟运行一次：
 1. 在“10 把 Key 权限完全相同”的前提下，用一把轮询 Key 请求 NVIDIA `GET /v1/models`，并保留过去发现、后来下线的模型。
 2. 对目录中的每个模型固定调用 `/v1/chat/completions` **4 次**，不再做跨 Key 权限确认，也不靠模型名称猜测它是否可用。
 3. 400 次推理请求由全局轮询依次分给 10 把 Key；每把 Key 约 40 次，并由独立限流器保证不超过 40/min。
-4. 使用三阶段、互不混分的测试套件：
+4. 使用四次独立调用、互不混分的测试负载：
    - **Health**：极短标记回复，判断聊天接口是否真的可请求，并测量 TTFT 与响应时间；
    - **Throughput A/B**：两次固定目标 128 output tokens；只有 API 报告至少 116 tokens（90%）的样本才进入 TPS，取中位数并记录变异系数（CV）；
-   - **Capability**：对 8 条内嵌记录执行筛选、计算、排序和校验码生成，返回严格 JSON，由本地代码按 7 项条件计 0–100 分。
+   - **Long Generation**：要求模型一次生成完整的 Next.js App Router 博客（6 个文件、25 项约束），自然停止或达到 3072 token 上限；保留原始回复并只记录 token、字符数、文件块、停止原因和是否截断等客观事实，不给内容质量打分。
 5. 更新 `history.db`、排行榜和公开静态端点，再部署到 GitHub Pages。
 
-前端按“观测 → 发现 → 决策 → 深入分析”重新组织：总览展示全舰队健康信号，Discover 支持按在线、已评分、有效吞吐和低波动筛选，排行榜可分别按综合分、本地能力、有效吞吐、可靠性与 TTFT 排序；模型档案、运行历史和双模型对比保留更细的诊断信息。各工作区使用 `#discover`、`#leaderboard` 等可复制的页内地址，并为窄屏和减少动态效果偏好做了适配。
+前端按“观测 → 发现 → 决策 → 深入分析”重新组织：总览展示全舰队健康信号，Discover 支持按在线、有长回复、有效吞吐和低波动筛选，排行榜可分别按综合运行分、长输出 token、有效吞吐、可靠性与 TTFT 排序；模型档案可查看模型最新一次完整原文，并支持复制和下载。各工作区使用 `#discover`、`#leaderboard` 等可复制的页内地址，并为窄屏和减少动态效果偏好做了适配。
 
-吞吐使用 NVIDIA API 返回的真实 `completion_tokens`，不再用词数估算 token。若流式端点不返回 usage，只记录明确标注的字符吞吐用于诊断，不会把它当成 TPS。能力测试不依赖联网知识，也不调用另一个模型充当裁判，因而每次可重复、可审计。
+吞吐和长任务都优先使用 NVIDIA API 返回的真实 `completion_tokens`，不再用词数估算 token。若流式端点不返回 usage，只记录明确标注的字符吞吐用于诊断，不会把它当成 TPS。长任务不调用另一个模型充当裁判，也不把“输出更长”包装成“质量更高”；完整性判断只检查约定的文件边界。
 
 模型会显示为 `AVAILABLE`、`GONE`、`UNAUTHORIZED`、`RATE_LIMITED`、`TIMEOUT`、`ERROR`、`STALE` 或 `UNKNOWN`。`AVAILABLE` 必须来自真实成功响应；仅出现在模型目录中不会被当作可用。
 
@@ -54,7 +54,8 @@ INCLUDE_ALL_CATALOG_MODELS=1
 REQUEST_TIMEOUT_SECONDS=90
 HEALTH_MAX_TOKENS=24
 THROUGHPUT_MAX_TOKENS=128
-CAPABILITY_MAX_TOKENS=384
+LONG_TASK_MAX_TOKENS=3072
+LONG_TASK_TIMEOUT_SECONDS=300
 STALE_AFTER_MINUTES=180
 ```
 
@@ -80,7 +81,7 @@ STALE_AFTER_MINUTES=180
 | 综合最佳 | [`/top/`](https://xiaoqianran.github.io/NIMStats/top/) | [`/top/model`](https://xiaoqianran.github.io/NIMStats/top/model) |
 | 速度最佳 | [`/top/speed`](https://xiaoqianran.github.io/NIMStats/top/speed) | [`/top/speed/model`](https://xiaoqianran.github.io/NIMStats/top/speed/model) |
 | Intelligence 最佳 | [`/top/intelligence`](https://xiaoqianran.github.io/NIMStats/top/intelligence) | [`/top/intelligence/model`](https://xiaoqianran.github.io/NIMStats/top/intelligence/model) |
-| 本地能力题最佳 | [`/top/capability`](https://xiaoqianran.github.io/NIMStats/top/capability) | [`/top/capability/model`](https://xiaoqianran.github.io/NIMStats/top/capability/model) |
+| 最新长输出 token 最多（非质量分） | [`/top/generation`](https://xiaoqianran.github.io/NIMStats/top/generation) | [`/top/generation/model`](https://xiaoqianran.github.io/NIMStats/top/generation/model) |
 
 也可以使用显式文件路径，例如 `top/speed.json` 和 `top/speed.txt`。
 
@@ -107,7 +108,7 @@ python3 scripts/manage_models.py allow some-org/model
 
 ## 数据说明
 
-`history.db` 是面板的 SQLite 数据源，浏览器通过 sql.js 在本地查询。`scripts/models_cache.json` 保存所有密钥目录的并集；`scripts/fleet_snapshot.json` 是当前舰队状态快照。临时的 `scripts/results.json` 不提交。
+`history.db` 是面板的 SQLite 数据源，浏览器通过 sql.js 在本地查询。每次运行的轻量长任务指标保存在历史结果中；体积较大的完整回复则在 `model_outputs` 中按模型覆盖，所以每个模型最多公开一份最新原文，不会在每个历史批次重复堆积。`scripts/models_cache.json` 保存模型目录并集；`scripts/fleet_snapshot.json` 是当前舰队状态快照。临时的 `scripts/results.json` 不提交。
 
 历史趋势只保留每批恰好包含 100 个不同模型结果的完整测试；早期 2、4、9、76 模型的试运行数据已清除，避免不同样本规模污染成功率、趋势和排行榜。
 

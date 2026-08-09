@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -11,9 +12,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from api_key_pool import ApiKeyPool, load_api_keys  # noqa: E402
-from benchmark_suite import CAPABILITY_EXPECTED, grade_capability_response  # noqa: E402
+from benchmark_suite import (  # noqa: E402
+    LONG_TASK_EXPECTED_FILES,
+    LONG_TASK_PROMPT,
+    analyze_long_response,
+)
 from build_pages import build_site  # noqa: E402
-from db_utils import sanitize_error  # noqa: E402
+from db_utils import sanitize_error, write_rolling_batch  # noqa: E402
 from model_catalog import classify_model, is_chat_model, refresh_models  # noqa: E402
 from rate_limiter import RateLimiter  # noqa: E402
 from rolling_bench import build_stage_jobs, next_batch, run_model  # noqa: E402
@@ -62,7 +67,7 @@ class MonitorTests(unittest.TestCase):
         jobs = build_stage_jobs(models)
         self.assertEqual(len(jobs), 400)
         self.assertEqual({stage for _, stage in jobs}, {
-            "health", "throughput-a", "throughput-b", "capability",
+            "health", "throughput-a", "throughput-b", "long-generation",
         })
         self.assertTrue(all(sum(job[0] == model for job in jobs) == 4 for model in models))
 
@@ -113,18 +118,28 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(batch, ["b", "c", "a"])
         self.assertEqual((start, end, cursor), (1, 4, 1))
 
-    def test_capability_suite_is_machine_graded(self) -> None:
-        exact = __import__("json").dumps(CAPABILITY_EXPECTED, separators=(",", ":"))
-        grade = grade_capability_response(exact)
-        self.assertEqual(grade["score"], 100.0)
-        self.assertTrue(grade["pass"])
+    def test_long_generation_uses_objective_completion_diagnostics(self) -> None:
+        response = "\n\n".join(
+            f"<<<FILE:{path}>>>\n// complete {path}\n<<<END_FILE>>>"
+            for path in LONG_TASK_EXPECTED_FILES
+        )
+        complete = analyze_long_response(response, "stop")
+        self.assertEqual(complete["expectedFilesPresent"], 6)
+        self.assertEqual(complete["filesComplete"], 6)
+        self.assertTrue(complete["outputComplete"])
+        self.assertFalse(complete["truncated"])
+        self.assertNotIn("score", complete)
+        self.assertIn("Do not omit code", LONG_TASK_PROMPT)
 
-        wrapped = grade_capability_response(f"```json\n{exact}\n```")
-        self.assertEqual(wrapped["score"], 85.0)
-        self.assertFalse(wrapped["pass"])
+        truncated = analyze_long_response(response[:-20], "length")
+        self.assertFalse(truncated["outputComplete"])
+        self.assertTrue(truncated["truncated"])
 
     def test_model_suite_always_makes_four_calls_and_aggregates_two_samples(self) -> None:
-        exact = __import__("json").dumps(CAPABILITY_EXPECTED, separators=(",", ":"))
+        long_response = "\n\n".join(
+            f"<<<FILE:{path}>>>\n// complete {path}\n<<<END_FILE>>>"
+            for path in LONG_TASK_EXPECTED_FILES
+        )
         health = {
             "success": True, "status": "AVAILABLE", "httpStatus": 200,
             "responseTime": 120, "timeToFirstToken": 60,
@@ -140,20 +155,74 @@ class MonitorTests(unittest.TestCase):
             **throughput_a, "responseTime": 1200, "timeToFirstToken": 200,
             "apiKeyIndex": 2,
         }
-        capability = {
+        long_generation = {
             "success": True, "status": "AVAILABLE", "httpStatus": 200,
-            "responseTime": 500, "timeToFirstToken": None,
-            "visibleResponseFull": exact, "apiKeyIndex": 3,
+            "responseTime": 5000, "timeToFirstToken": 120,
+            "tokensGenerated": 3072, "totalTokens": 3500,
+            "visibleResponseFull": long_response, "finishReason": "stop",
+            "apiKeyIndex": 3,
         }
         with patch(
             "rolling_bench.chat_completion",
-            side_effect=[health, throughput_a, throughput_b, capability],
+            side_effect=[health, throughput_a, throughput_b, long_generation],
         ) as completion:
             row = run_model("org/model", object())
         self.assertEqual(completion.call_count, 4)
         self.assertEqual(row["apiKeyIndexes"], [0, 1, 2, 3])
         self.assertEqual(row["throughputSampleCount"], 2)
-        self.assertEqual(row["capabilityScore"], 100.0)
+        self.assertEqual(row["longTokensGenerated"], 3072)
+        self.assertEqual(row["longFilesComplete"], 6)
+        self.assertTrue(row["longOutputComplete"])
+        self.assertNotIn("capabilityScore", row)
+
+    def test_latest_long_response_is_stored_without_historical_duplication(self) -> None:
+        base_row = {
+            "model": "org/model",
+            "testKind": "suite-v4-longgen",
+            "benchmarkVersion": "test-v4",
+            "success": True,
+            "status": "AVAILABLE",
+            "httpStatus": 200,
+            "responseTime": 100,
+            "timeToFirstToken": 50,
+            "throughputValid": True,
+            "longSuccess": True,
+            "longResponse": "first complete response",
+            "longFinishReason": "stop",
+            "longTokensGenerated": 100,
+            "longTotalTokens": 120,
+            "longResponseTime": 2000,
+            "longTtft": 80,
+            "longDecodeTps": 52.1,
+            "longCharsPerSecond": 220.0,
+            "longResponseChars": 23,
+            "longFilesEmitted": 2,
+            "longFilesComplete": 2,
+            "longOutputComplete": False,
+            "longTruncated": False,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "history.db"
+            for timestamp, response in (
+                ("2026-08-09T00:00:00Z", "first complete response"),
+                ("2026-08-09T00:05:00Z", "newest complete response"),
+            ):
+                write_rolling_batch(
+                    timestamp=timestamp,
+                    prompt="long prompt",
+                    models=[{**base_row, "longResponse": response}],
+                    batch_meta={"batch_size": 1, "kind": "suite-v4-longgen"},
+                    db_path=db_path,
+                )
+            with sqlite3.connect(db_path) as conn:
+                output_rows = conn.execute(
+                    "SELECT response_text, completion_tokens FROM model_outputs"
+                ).fetchall()
+                historical = conn.execute(
+                    "SELECT long_tokens_generated FROM model_results ORDER BY run_id"
+                ).fetchall()
+        self.assertEqual(output_rows, [("newest complete response", 100)])
+        self.assertEqual(historical, [(100,), (100,)])
 
     def test_pages_build_is_whitelisted_and_has_api_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,7 +230,7 @@ class MonitorTests(unittest.TestCase):
             files = build_site(ROOT, output)
             self.assertIn("top/speed/index.json", files)
             self.assertIn("top/speed/model", files)
-            self.assertIn("top/capability/model", files)
+            self.assertIn("top/generation/model", files)
             self.assertTrue((output / ".nojekyll").exists())
             self.assertFalse((output / "scripts" / "rolling_bench.py").exists())
             self.assertFalse((output / ".github").exists())

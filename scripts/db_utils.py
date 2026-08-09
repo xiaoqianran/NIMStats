@@ -110,7 +110,39 @@ def init_schema(conn: sqlite3.Connection) -> None:
             throughput_ttft_ms    INTEGER,
             throughput_sample_count INTEGER,
             throughput_cv         REAL,
+            long_tokens_generated INTEGER,
+            long_total_tokens     INTEGER,
+            long_latency_ms       INTEGER,
+            long_ttft_ms          INTEGER,
+            long_decode_tps       REAL,
+            long_chars_per_second REAL,
+            long_response_chars   INTEGER,
+            long_files_emitted    INTEGER,
+            long_files_complete   INTEGER,
+            long_output_complete  INTEGER,
+            long_truncated        INTEGER,
+            long_finish_reason    TEXT,
             PRIMARY KEY (run_id, model_id, test_kind)
+        );
+        CREATE TABLE IF NOT EXISTS model_outputs (
+            model_id              INTEGER PRIMARY KEY REFERENCES models(id) ON DELETE CASCADE,
+            run_id                INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+            updated_at            TEXT NOT NULL,
+            benchmark_version     TEXT,
+            response_text         TEXT,
+            finish_reason         TEXT,
+            completion_tokens     INTEGER,
+            total_tokens          INTEGER,
+            response_time_ms      INTEGER,
+            ttft_ms               INTEGER,
+            decode_tps            REAL,
+            chars_per_second      REAL,
+            response_chars        INTEGER,
+            files_emitted         INTEGER,
+            files_complete        INTEGER,
+            output_complete       INTEGER,
+            truncated             INTEGER,
+            error_text            TEXT
         );
         CREATE TABLE IF NOT EXISTS scheduler_state (
             key   TEXT PRIMARY KEY,
@@ -183,6 +215,18 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("throughput_ttft_ms", "INTEGER"),
         ("throughput_sample_count", "INTEGER"),
         ("throughput_cv", "REAL"),
+        ("long_tokens_generated", "INTEGER"),
+        ("long_total_tokens", "INTEGER"),
+        ("long_latency_ms", "INTEGER"),
+        ("long_ttft_ms", "INTEGER"),
+        ("long_decode_tps", "REAL"),
+        ("long_chars_per_second", "REAL"),
+        ("long_response_chars", "INTEGER"),
+        ("long_files_emitted", "INTEGER"),
+        ("long_files_complete", "INTEGER"),
+        ("long_output_complete", "INTEGER"),
+        ("long_truncated", "INTEGER"),
+        ("long_finish_reason", "TEXT"),
     ]:
         if col not in mrcols:
             conn.execute(f"ALTER TABLE model_results ADD COLUMN {col} {decl}")
@@ -370,8 +414,13 @@ def write_rolling_batch(
                             total_tokens, time_to_first_token, status, http_status, test_kind, decode_tps,
                             throughput_valid, chars_per_second, capability_score, capability_pass,
                             format_pass, benchmark_version, throughput_latency_ms, throughput_ttft_ms,
-                            throughput_sample_count, throughput_cv)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            throughput_sample_count, throughput_cv, long_tokens_generated,
+                            long_total_tokens, long_latency_ms, long_ttft_ms, long_decode_tps,
+                            long_chars_per_second, long_response_chars, long_files_emitted,
+                            long_files_complete, long_output_complete, long_truncated,
+                            long_finish_reason)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             run_id,
                             model_id,
@@ -395,6 +444,18 @@ def write_rolling_batch(
                             m.get("throughputTtft"),
                             m.get("throughputSampleCount"),
                             m.get("throughputCv"),
+                            m.get("longTokensGenerated"),
+                            m.get("longTotalTokens"),
+                            m.get("longResponseTime"),
+                            m.get("longTtft"),
+                            m.get("longDecodeTps"),
+                            m.get("longCharsPerSecond"),
+                            m.get("longResponseChars"),
+                            m.get("longFilesEmitted"),
+                            m.get("longFilesComplete"),
+                            1 if m.get("longOutputComplete") else 0,
+                            1 if m.get("longTruncated") else 0,
+                            m.get("longFinishReason"),
                         ),
                     )
                 except sqlite3.IntegrityError:
@@ -405,7 +466,11 @@ def write_rolling_batch(
                            test_kind=?, decode_tps=?, throughput_valid=?, chars_per_second=?,
                            capability_score=?, capability_pass=?, format_pass=?, benchmark_version=?,
                            throughput_latency_ms=?, throughput_ttft_ms=?,
-                           throughput_sample_count=?, throughput_cv=?
+                           throughput_sample_count=?, throughput_cv=?,
+                           long_tokens_generated=?, long_total_tokens=?, long_latency_ms=?,
+                           long_ttft_ms=?, long_decode_tps=?, long_chars_per_second=?,
+                           long_response_chars=?, long_files_emitted=?, long_files_complete=?,
+                           long_output_complete=?, long_truncated=?, long_finish_reason=?
                            WHERE run_id=? AND model_id=?""",
                         (
                             1 if m.get("success") else 0,
@@ -428,10 +493,70 @@ def write_rolling_batch(
                             m.get("throughputTtft"),
                             m.get("throughputSampleCount"),
                             m.get("throughputCv"),
+                            m.get("longTokensGenerated"),
+                            m.get("longTotalTokens"),
+                            m.get("longResponseTime"),
+                            m.get("longTtft"),
+                            m.get("longDecodeTps"),
+                            m.get("longCharsPerSecond"),
+                            m.get("longResponseChars"),
+                            m.get("longFilesEmitted"),
+                            m.get("longFilesComplete"),
+                            1 if m.get("longOutputComplete") else 0,
+                            1 if m.get("longTruncated") else 0,
+                            m.get("longFinishReason"),
                             run_id,
                             model_id,
                         ),
                     )
+
+            if "longSuccess" in primary:
+                conn.execute(
+                    """INSERT INTO model_outputs
+                       (model_id, run_id, updated_at, benchmark_version, response_text,
+                        finish_reason, completion_tokens, total_tokens, response_time_ms,
+                        ttft_ms, decode_tps, chars_per_second, response_chars,
+                        files_emitted, files_complete, output_complete, truncated, error_text)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(model_id) DO UPDATE SET
+                         run_id=excluded.run_id,
+                         updated_at=excluded.updated_at,
+                         benchmark_version=excluded.benchmark_version,
+                         response_text=excluded.response_text,
+                         finish_reason=excluded.finish_reason,
+                         completion_tokens=excluded.completion_tokens,
+                         total_tokens=excluded.total_tokens,
+                         response_time_ms=excluded.response_time_ms,
+                         ttft_ms=excluded.ttft_ms,
+                         decode_tps=excluded.decode_tps,
+                         chars_per_second=excluded.chars_per_second,
+                         response_chars=excluded.response_chars,
+                         files_emitted=excluded.files_emitted,
+                         files_complete=excluded.files_complete,
+                         output_complete=excluded.output_complete,
+                         truncated=excluded.truncated,
+                         error_text=excluded.error_text""",
+                    (
+                        model_id,
+                        run_id,
+                        timestamp,
+                        primary.get("benchmarkVersion"),
+                        primary.get("longResponse"),
+                        primary.get("longFinishReason"),
+                        primary.get("longTokensGenerated"),
+                        primary.get("longTotalTokens"),
+                        primary.get("longResponseTime"),
+                        primary.get("longTtft"),
+                        primary.get("longDecodeTps"),
+                        primary.get("longCharsPerSecond"),
+                        primary.get("longResponseChars"),
+                        primary.get("longFilesEmitted"),
+                        primary.get("longFilesComplete"),
+                        1 if primary.get("longOutputComplete") else 0,
+                        1 if primary.get("longTruncated") else 0,
+                        sanitize_error(primary.get("longError")),
+                    ),
+                )
 
             status = health.get("status") or (
                 STATUS_AVAILABLE if health.get("success") else STATUS_ERROR
@@ -542,9 +667,8 @@ def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
             """SELECT name, current_status, last_checked_at, last_success_at,
                       last_http_status, last_error, last_ttft_ms, last_latency_ms,
                       last_decode_tps, intelligence_score, last_throughput_valid,
-                      last_chars_per_second, last_capability_score,
-                      last_capability_pass, last_benchmark_version,
-                      last_throughput_at, last_capability_at,
+                      last_chars_per_second, last_benchmark_version,
+                      last_throughput_at,
                       last_throughput_sample_count, last_throughput_cv
                FROM models ORDER BY name"""
         ).fetchall()
@@ -569,13 +693,10 @@ def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
                     "intelligence_score": r[9],
                     "last_throughput_valid": bool(r[10]) if r[10] is not None else None,
                     "last_chars_per_second": r[11],
-                    "last_capability_score": r[12],
-                    "last_capability_pass": bool(r[13]) if r[13] is not None else None,
-                    "last_benchmark_version": r[14],
-                    "last_throughput_at": r[15],
-                    "last_capability_at": r[16],
-                    "last_throughput_sample_count": r[17],
-                    "last_throughput_cv": r[18],
+                    "last_benchmark_version": r[12],
+                    "last_throughput_at": r[13],
+                    "last_throughput_sample_count": r[14],
+                    "last_throughput_cv": r[15],
                 }
             )
         return {

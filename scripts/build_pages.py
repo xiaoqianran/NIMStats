@@ -21,8 +21,8 @@ API_ROUTES = {
     "top/speed/model": "top/speed.txt",
     "top/intelligence/index.json": "top/intelligence.json",
     "top/intelligence/model": "top/intelligence.txt",
-    "top/capability/index.json": "top/capability.json",
-    "top/capability/model": "top/capability.txt",
+    "top/generation/index.json": "top/generation.json",
+    "top/generation/model": "top/generation.txt",
 }
 
 
@@ -38,7 +38,9 @@ def validate_history(path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        required = {"models", "runs", "model_results", "scheduler_state"}
+        required = {
+            "models", "runs", "model_results", "model_outputs", "scheduler_state"
+        }
         missing = required - tables
         if missing:
             raise RuntimeError(f"history.db is missing tables: {sorted(missing)}")

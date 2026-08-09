@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="xiaoqianran 的 NVIDIA NIM 实时模型观测站：可用性、TTFT、有效吞吐、稳定性与可验证能力评估。">
+<meta name="description" content="xiaoqianran 的 NVIDIA NIM 实时模型观测站：可用性、TTFT、有效吞吐、稳定性与复杂长输出观测。">
 <meta name="keywords" content="AI, LLM, benchmarks, response time, NVIDIA NIM, model performance, OpenAI, Mistral, Qwen, leaderboard">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="https://xiaoqianran.github.io/NIMStats/">
@@ -18,7 +18,7 @@
 <meta property="twitter:card" content="summary_large_image">
 <meta property="twitter:url" content="https://xiaoqianran.github.io/NIMStats/">
 <meta property="twitter:title" content="NIM Observatory · xiaoqianran">
-<meta property="twitter:description" content="Live availability, speed, stability and capability signals for NVIDIA NIM models.">
+<meta property="twitter:description" content="Live availability, speed, stability and long-generation signals for NVIDIA NIM models.">
 <title>NIM Observatory · xiaoqianran</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -73,7 +73,7 @@
         <div class="hero-copy">
           <div class="eyebrow"><span class="live-pulse"></span> LIVE MODEL INTELLIGENCE</div>
           <h1>从“能调用”到<br><span>值得使用。</span></h1>
-          <p>把 NVIDIA NIM 的实时可用性、首字延迟、有效输出吞吐、波动与可验证能力放进同一张决策地图。</p>
+          <p>把 NVIDIA NIM 的实时可用性、首字延迟、有效输出吞吐、波动与复杂长输出放进同一张决策地图。</p>
           <div class="hero-actions">
             <button class="primary-action" data-jump="discover">发现模型</button>
             <button class="secondary-action" data-jump="leaderboard">查看排行榜</button>
@@ -85,7 +85,7 @@
           <div class="radar-core"><strong id="hero-live-count">—</strong><span>LIVE</span></div>
           <div class="radar-label label-a"><b id="hero-model-count">—</b> models</div>
           <div class="radar-label label-b"><b>400</b> req/min</div>
-          <div class="radar-label label-c"><b id="hero-suite-count">—</b> scored</div>
+          <div class="radar-label label-c"><b id="hero-suite-count">—</b> outputs</div>
         </div>
       </div>
 
@@ -94,7 +94,7 @@
         <div><span>02</span><b>TTFT</b><small>首个非空 Token</small></div>
         <div><span>03</span><b>Valid TPS</b><small>≥90% 目标输出</small></div>
         <div><span>04</span><b>Stability</b><small>双样本 CV</small></div>
-        <div><span>05</span><b>Local Suite</b><small>程序化能力判分</small></div>
+        <div><span>05</span><b>Long Build</b><small>3072-token 工程生成</small></div>
         <div><span>06</span><b>Intel</b><small>外部能力指数</small></div>
       </div>
       <div class="section-header mb-4">
@@ -155,7 +155,7 @@
     <!-- DISCOVER -->
     <section data-tab="discover">
       <div class="page-hero compact">
-        <div><div class="eyebrow">MODEL CATALOG</div><h2>发现适合任务的模型</h2><p>按实时状态、能力信号与经过输出完整性校验的性能结果筛选。</p></div>
+        <div><div class="eyebrow">MODEL CATALOG</div><h2>发现适合任务的模型</h2><p>按实时状态、长输出记录与经过输出完整性校验的性能结果筛选。</p></div>
         <div class="catalog-stat"><strong id="discover-count">—</strong><span>matching models</span></div>
       </div>
       <div class="discover-toolbar">
@@ -163,7 +163,7 @@
         <div class="segmented" id="discover-filters">
           <button class="active" data-discover-filter="all">全部</button>
           <button data-discover-filter="live">在线</button>
-          <button data-discover-filter="scored">已评分</button>
+          <button data-discover-filter="generated">有长回复</button>
           <button data-discover-filter="fast">有效吞吐</button>
           <button data-discover-filter="stable">低波动</button>
         </div>
@@ -179,12 +179,12 @@
           <h2>模型排行榜</h2>
           <p>不要让一个总分隐藏取舍。切换维度，找到适合你的冠军。</p>
         </div>
-        <div class="score-formula"><span>综合分</span><b>25%</b> 可用性 <b>15%</b> 响应 <b>15%</b> 吞吐 <b>20%</b> 本地能力 <b>25%</b> Intel</div>
+        <div class="score-formula"><span>综合分</span><b>35%</b> 可用性 <b>20%</b> 响应 <b>20%</b> 吞吐 <b>25%</b> Intel；长输出不计分</div>
       </div>
       <div class="section-header mb-4">
         <div class="ranking-modes" id="ranking-modes">
           <button class="active" data-rank-col="score" data-rank-dir="desc">综合</button>
-          <button data-rank-col="capabilityScore" data-rank-dir="desc">本地能力</button>
+          <button data-rank-col="longCompletionTokens" data-rank-dir="desc">长输出</button>
           <button data-rank-col="avgTps" data-rank-dir="desc">有效吞吐</button>
           <button data-rank-col="uptime" data-rank-dir="desc">可靠性</button>
           <button data-rank-col="avgTtft" data-rank-dir="asc">TTFT</button>
@@ -211,7 +211,7 @@
               <th data-col="score">Score <span class="sort-arrow">↓</span></th>
               <th data-col="displayStatus">Status <span class="sort-arrow"></span></th>
               <th data-col="uptime">Uptime <span class="sort-arrow"></span></th>
-              <th data-col="capabilityScore">Suite <span class="sort-arrow"></span></th>
+              <th data-col="longCompletionTokens">Long output <span class="sort-arrow"></span></th>
               <th data-col="intelligence">Intel <span class="sort-arrow"></span></th>
               <th data-col="avgTime">Avg Time <span class="sort-arrow"></span></th>
               <th data-col="avgTtft">TTFT <span class="sort-arrow"></span></th>
@@ -257,10 +257,32 @@
       <div class="explorer-header" id="explorer-header"></div>
       <div class="stats-row" id="explorer-stats"></div>
 
-      <!-- Model Capability & Benchmark Profile -->
+      <div class="long-output-card" id="long-output-card">
+        <div class="long-output-head">
+          <div>
+            <div class="eyebrow">COMPLEX GENERATION · NEXT.JS BLOG</div>
+            <h3>最新长任务原始回复</h3>
+            <p>自然停止，不评分；完整保留模型可见输出并记录客观生成信号。</p>
+          </div>
+          <div class="long-output-actions">
+            <button id="copy-long-output" type="button">复制代码</button>
+            <button id="download-long-output" type="button">下载回复</button>
+          </div>
+        </div>
+        <div class="long-output-metrics" id="long-output-metrics"></div>
+        <div class="long-output-error" id="long-output-error" hidden></div>
+        <details class="long-output-viewer" id="long-output-viewer">
+          <summary>展开完整回复 <span id="long-output-summary"></span></summary>
+          <pre><code id="long-output-code"></code></pre>
+        </details>
+        <div class="long-output-empty" id="long-output-empty">下一轮 v4 基准完成后，这里会显示该模型的完整长任务回复。</div>
+        <div class="copy-feedback" id="copy-feedback" aria-live="polite"></div>
+      </div>
+
+      <!-- Operational benchmark profile -->
       <div class="chart-row chart-row-2" style="margin-bottom:20px">
         <div class="card">
-          <div class="card-title"><span class="dot" style="background:var(--success)"></span>Model Capability Breakdown (Radar)</div>
+          <div class="card-title"><span class="dot" style="background:var(--success)"></span>Normalized Operational Profile</div>
           <div style="position:relative;height:280px;display:flex;align-items:center;justify-content:center">
             <canvas id="chart-explorer-radar"></canvas>
             <div id="explorer-no-radar" class="no-data" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:12px;color:var(--text-dim)">⚠️ Supply ARTIFICIAL_ANALYSIS_API_KEY to view radar capabilities</div>

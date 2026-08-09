@@ -2,10 +2,10 @@
 """Generate specialized top model endpoints from history.db.
 
 Outputs:
-- Balanced: reliability (25%) + speed (15%) + valid throughput (15%) + local suite (20%) + intelligence (25%)
+- Balanced: reliability (35%) + speed (20%) + valid throughput (20%) + intelligence (25%)
 - Speed (top/speed.json, top/speed.txt): speed (50%) + throughput (50%)
 - Intelligence (top/intelligence.json, top/intelligence.txt): intelligence (70%) + reliability (30%)
-- Capability (top/capability.json, top/capability.txt): local machine-graded suite
+- Generation (top/generation.json, top/generation.txt): latest observed completion tokens (not a quality score)
 """
 
 import json
@@ -27,7 +27,6 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         ("time_to_first_token", "INTEGER"),
         ("decode_tps", "REAL"),
         ("throughput_valid", "INTEGER"),
-        ("capability_score", "REAL"),
     ):
         if name not in columns:
             conn.execute(f"ALTER TABLE model_results ADD COLUMN {name} {declaration}")
@@ -54,8 +53,7 @@ def load_data(conn):
     for run_id, ts, ft, fm in runs_q:
         results_q = conn.execute(
             """SELECT m.name, mr.success, mr.response_time, mr.tokens_generated,
-                      mr.time_to_first_token, mr.decode_tps, mr.throughput_valid,
-                      mr.capability_score
+                      mr.time_to_first_token, mr.decode_tps, mr.throughput_valid
                FROM model_results mr
                JOIN models m ON mr.model_id = m.id
                WHERE mr.run_id = ?""",
@@ -68,9 +66,8 @@ def load_data(conn):
             "models": [
                 {"model": m, "success": bool(s), "responseTime": rt,
                  "tokensGenerated": tg, "timeToFirstToken": ttft,
-                 "decodeTps": dps, "throughputValid": bool(valid),
-                 "capabilityScore": capability}
-                for m, s, rt, tg, ttft, dps, valid, capability in results_q
+                 "decodeTps": dps, "throughputValid": bool(valid)}
+                for m, s, rt, tg, ttft, dps, valid in results_q
             ],
         })
     return runs, models_intel
@@ -93,11 +90,6 @@ def compute_stats(runs, models_intel):
         for r in successes:
             if r.get("throughputValid") and r.get("decodeTps"):
                 tps_arr.append(r["decodeTps"])
-        capability_arr = [
-            r["capabilityScore"] for r in results
-            if r and r.get("capabilityScore") is not None
-        ]
-
         stats[model] = {
             "totalRuns": len(tested),
             "successCount": len(successes),
@@ -106,7 +98,6 @@ def compute_stats(runs, models_intel):
             "bestTime": min(times) if times else None,
             "avgTtft": sum(ttft_arr) / len(ttft_arr) if ttft_arr else None,
             "avgTps": sum(tps_arr) / len(tps_arr) if tps_arr else None,
-            "capabilityScore": sum(capability_arr) / len(capability_arr) if capability_arr else None,
             "wins": 0,
             "lastSeen": None,
             "intelligence": models_intel.get(model)
@@ -143,13 +134,15 @@ def compute_stats(runs, models_intel):
         
         intel_val = s["intelligence"] if s["intelligence"] is not None else 50.0
 
-        suite_val = s["capabilityScore"] if s["capabilityScore"] is not None else 0.0
-
         # Compute specialized scores; invalid or estimated token counts never enter TPS.
-        s["score_balanced"] = round(s["uptime"] * 25 + speed_score * 0.15 + tps_score * 0.15 + suite_val * 0.2 + (intel_val / 100) * 25)
+        s["score_balanced"] = round(
+            s["uptime"] * 35
+            + speed_score * 0.20
+            + tps_score * 0.20
+            + (intel_val / 100) * 25
+        )
         s["score_speed"] = round(speed_score * 0.5 + tps_score * 0.5)
         s["score_intel"] = round((intel_val / 100) * 70 + s["uptime"] * 30)
-        s["score_capability"] = round(suite_val)
 
     return stats
 
@@ -164,7 +157,6 @@ def write_endpoint(slug: str, best_model: str, stats_record: dict, key_name: str
         "provider": best_model.split("/")[0] if "/" in best_model else best_model,
         "score": stats_record[key_name],
         "intelligence": stats_record["intelligence"],
-        "local_capability_score": round(stats_record["capabilityScore"], 1) if stats_record["capabilityScore"] is not None else None,
         "uptime": round(stats_record["uptime"] * 100, 1),
         "avg_response_time_ms": stats_record["avgTime"],
         "best_response_time_ms": stats_record["bestTime"],
@@ -182,6 +174,76 @@ def write_endpoint(slug: str, best_model: str, stats_record: dict, key_name: str
     print(f"OK Generated top/{slug} -- best model: {best_model} (score: {stats_record[key_name]})")
 
 
+def load_latest_generation(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Load the overwrite-only latest long response metadata for each model."""
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='model_outputs'"
+    ).fetchone()
+    if not table:
+        return {}
+    rows = conn.execute(
+        """SELECT m.name, mo.updated_at, mo.completion_tokens, mo.total_tokens,
+                  mo.response_time_ms, mo.ttft_ms, mo.decode_tps,
+                  mo.response_chars, mo.files_emitted, mo.files_complete,
+                  mo.output_complete, mo.truncated, mo.finish_reason
+           FROM model_outputs mo
+           JOIN models m ON m.id = mo.model_id"""
+    ).fetchall()
+    return {
+        name: {
+            "updated_at": updated_at,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "response_time_ms": response_time_ms,
+            "ttft_ms": ttft_ms,
+            "decode_tps": decode_tps,
+            "response_chars": response_chars,
+            "files_emitted": files_emitted,
+            "files_complete": files_complete,
+            "output_complete": bool(output_complete),
+            "truncated": bool(truncated),
+            "finish_reason": finish_reason,
+        }
+        for (
+            name, updated_at, completion_tokens, total_tokens, response_time_ms,
+            ttft_ms, decode_tps, response_chars, files_emitted, files_complete,
+            output_complete, truncated, finish_reason,
+        ) in rows
+    }
+
+
+def write_generation_endpoint(best_model: str, record: dict) -> None:
+    """Publish an objective longest-observed-output endpoint without scoring it."""
+    output = {
+        "best_model": best_model,
+        "provider": best_model.split("/")[0] if "/" in best_model else best_model,
+        "metric": "latest_completion_tokens",
+        "value": record["completion_tokens"],
+        **record,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (TOP_DIR / "generation.json").write_text(
+        json.dumps(output, indent=2), encoding="utf-8"
+    )
+    (TOP_DIR / "generation.txt").write_text(best_model, encoding="utf-8")
+    print(
+        "OK Generated top/generation -- longest latest response: "
+        f"{best_model} ({record['completion_tokens']} tokens)"
+    )
+
+
+def write_empty_generation_endpoint() -> None:
+    output = {
+        "error": "No long-generation output available yet",
+        "metric": "latest_completion_tokens",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (TOP_DIR / "generation.json").write_text(
+        json.dumps(output, indent=2), encoding="utf-8"
+    )
+    (TOP_DIR / "generation.txt").write_text("", encoding="utf-8")
+
+
 def main():
     if not HISTORY_DB.exists():
         print(f"Error: {HISTORY_DB} not found", file=sys.stderr)
@@ -191,6 +253,7 @@ def main():
     try:
         _ensure_columns(conn)
         runs, models_intel = load_data(conn)
+        generations = load_latest_generation(conn)
         TOP_DIR.mkdir(parents=True, exist_ok=True)
         
         if not runs:
@@ -198,6 +261,7 @@ def main():
             empty = {"error": "No benchmark data available", "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
             (TOP_DIR / "index.json").write_text(json.dumps(empty, indent=2), encoding="utf-8")
             (TOP_DIR / "model.txt").write_text("", encoding="utf-8")
+            write_empty_generation_endpoint()
             return 0
             
         stats = compute_stats(runs, models_intel)
@@ -228,11 +292,21 @@ def main():
         best_intel = max(eligible_models, key=lambda m: stats[m]["score_intel"])
         write_endpoint("intelligence", best_intel, stats[best_intel], "score_intel")
 
-        # 4. Local deterministic capability suite
-        capability_models = [m for m in eligible_models if stats[m]["capabilityScore"] is not None]
-        if capability_models:
-            best_capability = max(capability_models, key=lambda m: stats[m]["score_capability"])
-            write_endpoint("capability", best_capability, stats[best_capability], "score_capability")
+        # 4. Long generation is an observed quantity, not a model-quality score.
+        generation_models = [
+            model
+            for model in eligible_models
+            if model in generations
+            and generations[model].get("completion_tokens") is not None
+        ]
+        if generation_models:
+            best_generation = max(
+                generation_models,
+                key=lambda model: generations[model]["completion_tokens"],
+            )
+            write_generation_endpoint(best_generation, generations[best_generation])
+        else:
+            write_empty_generation_endpoint()
         
     finally:
         conn.close()

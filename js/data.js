@@ -50,15 +50,14 @@ function loadFromDb(db) {
     const mq = db.exec(
       `SELECT name, intelligence_score, current_status, last_checked_at, last_success_at,
               last_http_status, last_error, last_ttft_ms, last_latency_ms, last_decode_tps,
-              last_throughput_valid, last_chars_per_second, last_capability_score,
-              last_capability_pass, last_benchmark_version,
+              last_throughput_valid, last_chars_per_second, last_benchmark_version,
               last_throughput_sample_count, last_throughput_cv
        FROM models ORDER BY name`
     );
     if (mq.length && mq[0].values.length) {
       for (const row of mq[0].values) {
         const [name, intel, cur, checked, successAt, httpSt, err, ttft, lat, tps,
-          throughputValid, charsPerSecond, capabilityScore, capabilityPass, benchmarkVersion,
+          throughputValid, charsPerSecond, benchmarkVersion,
           throughputSampleCount, throughputCv] = row;
         modelMeta[name] = {
           intelligence: intel != null ? intel : 50.0,
@@ -73,8 +72,6 @@ function loadFromDb(db) {
           lastDecodeTps: tps,
           lastThroughputValid: throughputValid === 1,
           lastCharsPerSecond: charsPerSecond,
-          capabilityScore,
-          capabilityPass: capabilityPass === 1,
           benchmarkVersion,
           throughputSampleCount,
           throughputCv,
@@ -84,6 +81,47 @@ function loadFromDb(db) {
   } catch (err) {
     console.warn('models meta load failed', err);
   }
+
+  // Latest full long-generation response per model. The table is intentionally
+  // overwrite-only so Pages stays bounded while historical metrics remain in
+  // model_results.
+  try {
+    const oq = db.exec(
+      `SELECT m.name, o.updated_at, o.benchmark_version, o.response_text,
+              o.finish_reason, o.completion_tokens, o.total_tokens,
+              o.response_time_ms, o.ttft_ms, o.decode_tps, o.chars_per_second,
+              o.response_chars, o.files_emitted, o.files_complete,
+              o.output_complete, o.truncated, o.error_text
+       FROM model_outputs o JOIN models m ON o.model_id = m.id`
+    );
+    if (oq.length) {
+      for (const row of oq[0].values) {
+        const [name, updatedAt, benchmarkVersion, responseText, finishReason,
+          completionTokens, totalTokens, responseTimeMs, ttftMs, longTps,
+          longCharsPerSecond, responseChars, filesEmitted, filesComplete,
+          outputComplete, truncated, errorText] = row;
+        if (!modelMeta[name]) modelMeta[name] = {};
+        modelMeta[name].longOutput = {
+          updatedAt,
+          benchmarkVersion,
+          responseText: responseText || '',
+          finishReason,
+          completionTokens,
+          totalTokens,
+          responseTimeMs,
+          ttftMs,
+          decodeTps: longTps,
+          charsPerSecond: longCharsPerSecond,
+          responseChars: responseChars || 0,
+          filesEmitted: filesEmitted || 0,
+          filesComplete: filesComplete || 0,
+          outputComplete: outputComplete === 1,
+          truncated: truncated === 1,
+          error: errorText,
+        };
+      }
+    }
+  } catch (_) { /* model_outputs is absent before the v4 migration */ }
 
   const runsQ = db.exec(
     `SELECT r.id, r.timestamp, p.text, m.name, r.fastest_time, r.batch_size, r.kind
@@ -117,8 +155,7 @@ function loadFromDb(db) {
     resQ = db.exec(
       `SELECT mr.run_id, m.name, mr.success, e.text, mr.response_time, mr.tokens_generated,
               mr.total_tokens, mr.time_to_first_token, mr.status, mr.http_status, mr.test_kind, mr.decode_tps,
-              mr.throughput_valid, mr.chars_per_second, mr.capability_score,
-              mr.capability_pass, mr.format_pass, mr.benchmark_version,
+              mr.throughput_valid, mr.chars_per_second, mr.benchmark_version,
               mr.throughput_latency_ms, mr.throughput_ttft_ms,
               mr.throughput_sample_count, mr.throughput_cv
        FROM model_results mr
@@ -155,14 +192,11 @@ function loadFromDb(db) {
       const dps = row[11] != null ? row[11] : null;
       const throughputValid = row[12] === 1;
       const charsPerSecond = row[13] != null ? row[13] : null;
-      const capabilityScore = row[14] != null ? row[14] : null;
-      const capabilityPass = row[15] === 1;
-      const formatPass = row[16] === 1;
-      const benchmarkVersion = row[17] != null ? row[17] : null;
-      const throughputLatency = row[18] != null ? row[18] : null;
-      const throughputTtft = row[19] != null ? row[19] : null;
-      const throughputSampleCount = row[20] != null ? row[20] : 0;
-      const throughputCv = row[21] != null ? row[21] : null;
+      const benchmarkVersion = row[14] != null ? row[14] : null;
+      const throughputLatency = row[15] != null ? row[15] : null;
+      const throughputTtft = row[16] != null ? row[16] : null;
+      const throughputSampleCount = row[17] != null ? row[17] : 0;
+      const throughputCv = row[18] != null ? row[18] : null;
       const key = `${run_id}||${model}`;
       const cand = {
         model,
@@ -178,9 +212,6 @@ function loadFromDb(db) {
         decodeTps: throughputValid && dps != null ? dps : null,
         throughputValid,
         charsPerSecond,
-        capabilityScore,
-        capabilityPass,
-        formatPass,
         benchmarkVersion,
         throughputLatency,
         throughputTtft,
@@ -195,7 +226,7 @@ function loadFromDb(db) {
       // Prefer successful throughput > successful health > any
       const rank = (r) =>
         (r.success ? 4 : 0) +
-        (r.testKind === 'suite-v3' ? 3 : r.testKind === 'throughput' ? 2 : r.testKind === 'health' ? 1 : 0);
+        (r.testKind?.startsWith('suite-v') ? 3 : r.testKind === 'throughput' ? 2 : r.testKind === 'health' ? 1 : 0);
       if (rank(cand) >= rank(prev)) bucket.set(key, cand);
     }
   }
@@ -234,10 +265,6 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
       .filter((r) => r.throughputValid)
       .map((r) => r.decodeTps)
       .filter((t) => t != null && t > 0);
-    const capabilityArr = results
-      .map((r) => r?.capabilityScore)
-      .filter((score) => score != null);
-
     const meta = modelMeta[model] || {};
     modelStats[model] = {
       results,
@@ -254,8 +281,8 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
       bestTime: times.length ? Math.min(...times) : null,
       avgTtft: ttftArr.length ? avg(ttftArr) : (meta.lastTtftMs || null),
       avgTps: tpsArr.length ? avg(tpsArr) : (meta.lastThroughputValid ? meta.lastDecodeTps : null),
-      capabilityScore: capabilityArr.length ? avg(capabilityArr) : (meta.capabilityScore ?? null),
-      capabilityPass: meta.capabilityPass || false,
+      longOutput: meta.longOutput || null,
+      longCompletionTokens: meta.longOutput?.completionTokens ?? null,
       charsPerSecond: meta.lastCharsPerSecond || null,
       benchmarkVersion: meta.benchmarkVersion || null,
       throughputSampleCount: meta.throughputSampleCount || 0,
@@ -310,9 +337,8 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
     s.speedScore = speedScore;
     s.tpsScore = tpsScore;
     const intel = s.intelligence != null ? s.intelligence : 50;
-    const suite = s.capabilityScore != null ? s.capabilityScore : 0;
-    // Local verifiable suite is kept distinct from the external intelligence index.
-    s.score = Math.round(s.uptime * 25 + speedScore * 0.15 + tpsScore * 0.15 + suite * 0.2 + (intel / 100) * 25);
+    // Long-generation output is diagnostic and deliberately carries no score.
+    s.score = Math.round(s.uptime * 35 + speedScore * 0.2 + tpsScore * 0.2 + (intel / 100) * 25);
 
     const half = Math.floor(s.responseTimes.length / 2);
     const firstHalf = s.responseTimes.slice(0, half).filter((v) => v != null);

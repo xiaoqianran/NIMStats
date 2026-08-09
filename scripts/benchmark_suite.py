@@ -1,111 +1,111 @@
-"""Versioned, machine-verifiable workloads for the rolling NIM benchmark."""
+"""Versioned workloads and objective diagnostics for the rolling NIM benchmark."""
 
 from __future__ import annotations
 
-import json
+import re
 from typing import Any
 
-BENCHMARK_VERSION = "nimstats-v3-2026-08"
+BENCHMARK_VERSION = "nimstats-v4-longgen-2026-08"
 
 HEALTH_MARKER = "NIM_OK_7F3A"
 HEALTH_PROMPT = (
     "Availability probe. Reply with exactly NIM_OK_7F3A and nothing else."
 )
 
-# A fixed 128-token output target follows the controlled ISL/OSL approach used
-# by NVIDIA's inference benchmark tooling. ``ignore_eos`` is sent when the
-# hosted endpoint supports it; callers retain a compatibility fallback.
+# Controlled 128-token output remains separate from the natural-stop long task.
 THROUGHPUT_TARGET_TOKENS = 128
 THROUGHPUT_MIN_VALID_TOKENS = 116  # ceil(128 * 0.90)
 THROUGHPUT_PROMPT = """Performance workload. Write one continuous plain-English paragraph about a fictional library moving its catalog from paper cards to a digital archive. Do not use Markdown, lists, headings, code, quotations, or a conclusion. Begin exactly with "At dawn, the Atlas library" and keep adding concrete operational details until the platform stops generation. Do not stop early."""
 
-# This task needs no current facts and no judge model. Every requested value is
-# derived from the records in the prompt and can be checked locally.
-CAPABILITY_PROMPT = """Deterministic reasoning and instruction-following test.
+LONG_TASK_EXPECTED_FILES = (
+    "app/layout.tsx",
+    "app/page.tsx",
+    "app/blog/[slug]/page.tsx",
+    "components/BlogExplorer.tsx",
+    "lib/posts.ts",
+    "app/globals.css",
+)
 
-Each record has: id, region, units, price, returned, priority.
+LONG_TASK_PROMPT = """You are a senior frontend engineer. Build a complete, production-quality blog experience using Next.js App Router, React, TypeScript and plain CSS.
 
-A17,north,17,12,2,3
-B04,west,23,8,5,4
-C29,north,14,15,1,5
-D11,south,31,7,8,2
-E08,east,19,11,3,4
-F22,west,16,13,0,1
-G05,south,28,9,4,5
-H31,east,21,10,2,3
+Return the complete source code for every requested file. Do not explain the implementation. Do not use Markdown prose outside the file blocks. Do not omit code, use placeholders, write ellipses, say "same as above", or shorten any file.
 
-Rules:
-1. net_units = units - returned.
-2. A record is eligible only when net_units >= 16 AND priority >= 3.
-3. net_revenue = net_units * price.
-4. ranking_score = net_revenue + 7 * priority.
-5. Rank every eligible record by ranking_score descending; break ties by id ascending.
-6. weighted_checksum = sum(1-based rank_position * ranking_score) over the full ranking.
-7. verification_code is the first letter of each ranked id, concatenated in rank order, followed by "-", the sum of all eligible ranking_score values padded to four digits, followed by "-", weighted_checksum.
+Output every file in this exact order and format:
 
-Return exactly one JSON object with exactly these keys in this order:
-{"eligible_ids": [eligible ids sorted lexicographically], "ranked_ids": [all eligible ids in rank order], "top3_net_revenue": integer sum of net_revenue for the first three ranked records, "weighted_checksum": integer, "verification_code": string}
+<<<FILE:app/layout.tsx>>>
+complete file content
+<<<END_FILE>>>
 
-Do the reasoning silently. Return only the JSON object: no Markdown fence, explanation, or extra keys."""
+<<<FILE:app/page.tsx>>>
+complete file content
+<<<END_FILE>>>
 
-CAPABILITY_EXPECTED = {
-    "eligible_ids": ["B04", "E08", "G05", "H31"],
-    "ranked_ids": ["G05", "H31", "E08", "B04"],
-    "top3_net_revenue": 582,
-    "weighted_checksum": 1973,
-    "verification_code": "GHEB-0838-1973",
-}
+<<<FILE:app/blog/[slug]/page.tsx>>>
+complete file content
+<<<END_FILE>>>
+
+<<<FILE:components/BlogExplorer.tsx>>>
+complete file content
+<<<END_FILE>>>
+
+<<<FILE:lib/posts.ts>>>
+complete file content
+<<<END_FILE>>>
+
+<<<FILE:app/globals.css>>>
+complete file content
+<<<END_FILE>>>
+
+The application must include:
+
+1. A responsive header with brand, navigation and mobile menu.
+2. A visually prominent featured article.
+3. At least eight realistic blog posts with complete metadata and article content.
+4. Search across titles, excerpts, categories and authors.
+5. Category filtering.
+6. Sorting by newest, oldest, most viewed and reading time.
+7. A responsive article card grid.
+8. A useful empty-search state.
+9. Individual dynamic article pages using the slug route.
+10. generateStaticParams for every article.
+11. Dynamic metadata for article pages.
+12. Author, publication date, reading time, tags and view count.
+13. Previous and next article navigation.
+14. A related-articles section.
+15. A newsletter subscription form with client-side validation.
+16. Semantic HTML and accessible labels.
+17. Visible keyboard focus styles.
+18. Dark and light color-scheme support.
+19. Reduced-motion support.
+20. Responsive layouts for desktop, tablet and mobile.
+21. CSS custom properties for colors, spacing, typography and radius.
+22. No external component libraries, icon libraries or network requests.
+23. No remote images; create visual covers using CSS gradients.
+24. No dangerouslySetInnerHTML.
+25. No TODO comments or incomplete implementations.
+
+Write every file completely. Continue until all six files have been emitted and closed with <<<END_FILE>>>."""
 
 
-def extract_json_object(text: str | None) -> tuple[dict[str, Any] | None, bool]:
-    """Return the first decodable object and whether the whole response is JSON."""
-    raw = (text or "").strip()
-    if not raw:
-        return None, False
-    decoder = json.JSONDecoder()
-    for index, char in enumerate(raw):
-        if char != "{":
-            continue
-        try:
-            value, end = decoder.raw_decode(raw[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            only_json = index == 0 and not raw[end:].strip()
-            return value, only_json
-    return None, False
-
-
-def grade_capability_response(text: str | None) -> dict[str, Any]:
-    """Programmatically score format and five independently verifiable fields."""
-    value, only_json = extract_json_object(text)
-    if value is None:
-        return {
-            "score": 0.0,
-            "pass": False,
-            "formatPass": False,
-            "checks": {key: False for key in ("json_only", "exact_keys", *CAPABILITY_EXPECTED)},
-        }
-
-    exact_keys = list(value.keys()) == list(CAPABILITY_EXPECTED.keys())
-    checks = {
-        "json_only": only_json,
-        "exact_keys": exact_keys,
-        **{key: value.get(key) == expected for key, expected in CAPABILITY_EXPECTED.items()},
-    }
-    weights = {
-        "json_only": 15,
-        "exact_keys": 10,
-        "eligible_ids": 15,
-        "ranked_ids": 20,
-        "top3_net_revenue": 15,
-        "weighted_checksum": 15,
-        "verification_code": 10,
-    }
-    score = float(sum(weights[key] for key, passed in checks.items() if passed))
+def analyze_long_response(
+    text: str | None,
+    finish_reason: str | None,
+) -> dict[str, Any]:
+    """Describe observable output completeness without assigning a quality score."""
+    response = text or ""
+    file_paths = re.findall(r"(?m)^<<<FILE:([^>\r\n]+)>>>\s*$", response)
+    closed_files = len(re.findall(r"(?m)^<<<END_FILE>>>\s*$", response))
+    expected_present = sum(path in file_paths for path in LONG_TASK_EXPECTED_FILES)
+    protocol_complete = (
+        expected_present == len(LONG_TASK_EXPECTED_FILES)
+        and closed_files >= len(LONG_TASK_EXPECTED_FILES)
+        and response.rstrip().endswith("<<<END_FILE>>>")
+    )
     return {
-        "score": score,
-        "pass": score == 100.0,
-        "formatPass": only_json and exact_keys,
-        "checks": checks,
+        "responseChars": len(response),
+        "filesEmitted": len(file_paths),
+        "filesComplete": closed_files,
+        "expectedFilesPresent": expected_present,
+        "outputComplete": protocol_complete,
+        "truncated": finish_reason == "length",
     }

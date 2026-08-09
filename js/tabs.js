@@ -20,14 +20,14 @@ function renderOverview() {
   const liveGone = modelNames.filter(m => modelStats[m]?.displayStatus === 'GONE').length;
   const liveStale = modelNames.filter(m => modelStats[m]?.displayStatus === 'STALE').length;
   const liveUnknown = modelNames.filter(m => !['AVAILABLE','GONE','STALE'].includes(modelStats[m]?.displayStatus)).length;
-  const suiteCount = modelNames.filter(m => modelStats[m]?.capabilityScore != null).length;
+  const outputCount = modelNames.filter(m => modelStats[m]?.longOutput?.responseText).length;
 
   const heroLive = document.getElementById('hero-live-count');
   const heroModels = document.getElementById('hero-model-count');
   const heroSuite = document.getElementById('hero-suite-count');
   if (heroLive) heroLive.textContent = liveAvail;
   if (heroModels) heroModels.textContent = modelNames.length;
-  if (heroSuite) heroSuite.textContent = suiteCount;
+  if (heroSuite) heroSuite.textContent = outputCount;
 
   const kpiData = [
     { icon: 'RUN', label: 'Total Batches', val: totalRuns, sub: (() => { const rr = rawRuns?.length ? rawRuns : runs; return `${rr[0]?.timestamp?.slice(0,10) || ''} → ${rr[rr.length-1]?.timestamp?.slice(0,10) || ''} · full-fleet rolling`; })(), decimals: 0 },
@@ -333,7 +333,7 @@ function renderDiscover() {
     const s = state.modelStats[model] || {};
     if (query && !model.toLowerCase().includes(query) && !providerMeta(model).name.toLowerCase().includes(query)) return false;
     if (filter === 'live' && s.displayStatus !== 'AVAILABLE') return false;
-    if (filter === 'scored' && s.capabilityScore == null) return false;
+    if (filter === 'generated' && !s.longOutput?.responseText) return false;
     if (filter === 'fast' && s.avgTps == null) return false;
     if (filter === 'stable' && !(s.throughputCv != null && s.throughputCv <= 0.1)) return false;
     return true;
@@ -363,7 +363,7 @@ function renderDiscover() {
       <div class="model-score-row">
         <div class="score-orbit" style="--score:${score}"><strong>${score}</strong><span>overall</span></div>
         <div class="model-primary-metrics">
-          <div><span>Local Suite</span><b>${s.capabilityScore != null ? s.capabilityScore.toFixed(0) : '—'}</b></div>
+          <div><span>Long output</span><b>${s.longCompletionTokens != null ? s.longCompletionTokens.toLocaleString() + ' tok' : '—'}</b></div>
           <div><span>Intel</span><b>${s.intelligence != null ? s.intelligence.toFixed(0) : '—'}</b></div>
         </div>
       </div>
@@ -372,7 +372,7 @@ function renderDiscover() {
         <div><span>Valid TPS</span><b>${s.avgTps ? s.avgTps.toFixed(1) : '—'}</b></div>
         <div><span>Uptime</span><b>${(s.uptime * 100).toFixed(1)}%</b></div>
       </div>
-      <div class="model-card-footer"><span>${cv} · ${s.throughputSampleCount || 0}/2 samples</span><button type="button">打开档案 →</button></div>
+      <div class="model-card-footer"><span>${cv} · ${s.longOutput ? `${s.longOutput.filesComplete}/6 files` : 'no long output'}</span><button type="button">打开档案 →</button></div>
     </article>`;
   }).join('');
 
@@ -435,7 +435,7 @@ function renderLbTable() {
       <td><div class="score-cell"><span class="score-num" style="color:${scoreVar}">${r.score}</span></div></td>
       <td><span style="font-size:10px;font-weight:700;color:${statusColor};font-family:'JetBrains Mono'">${dStatus}</span></td>
       <td><div class="uptime-cell"><span class="uptime-val" style="color:${colorVar}">${uptimePct}%</span><div class="uptime-bar"><div class="uptime-fill" style="width:${uptimePct}%;background:${colorVar}"></div></div></div></td>
-      <td class="mono" style="font-weight:700;color:var(--success)">${r.capabilityScore != null ? r.capabilityScore.toFixed(0) : '—'}</td>
+      <td class="mono" style="font-weight:700;color:var(--success)">${r.longCompletionTokens != null ? r.longCompletionTokens.toLocaleString()+' tok' : '—'}</td>
       <td class="mono" style="font-weight:600;color:var(--blue)">${r.intelligence ? r.intelligence.toFixed(0) : '—'}</td>
       <td class="mono">${r.avgTime ? (r.avgTime/1000).toFixed(2)+'s' : '—'}</td>
       <td class="mono" style="color:var(--warning)">${r.avgTtft ? r.avgTtft.toFixed(0)+'ms' : '—'}</td>
@@ -478,6 +478,79 @@ function initLeaderboardSort() {
 }
 
 // ─── Explorer Tab ─────────────────────────────────────────────────────────────
+function renderLongOutput(model, output) {
+  const metrics = document.getElementById('long-output-metrics');
+  const viewer = document.getElementById('long-output-viewer');
+  const code = document.getElementById('long-output-code');
+  const empty = document.getElementById('long-output-empty');
+  const error = document.getElementById('long-output-error');
+  const summary = document.getElementById('long-output-summary');
+  const copyButton = document.getElementById('copy-long-output');
+  const downloadButton = document.getElementById('download-long-output');
+  const feedback = document.getElementById('copy-feedback');
+  if (!metrics || !viewer || !code || !empty) return;
+
+  const response = output?.responseText || '';
+  const hasResponse = response.length > 0;
+  viewer.hidden = !hasResponse;
+  empty.hidden = Boolean(output);
+  code.textContent = response;
+  if (summary) summary.textContent = hasResponse ? `· ${output.responseChars.toLocaleString()} chars` : '';
+  if (error) {
+    error.hidden = !output?.error;
+    error.textContent = output?.error ? `请求异常：${output.error}` : '';
+  }
+
+  const stateLabel = !output
+    ? '等待数据'
+    : output.outputComplete
+      ? '协议完整'
+      : output.truncated
+        ? '达到长度上限'
+        : hasResponse
+          ? '部分输出'
+          : '无可见输出';
+  const stateClass = output?.outputComplete ? 'complete' : output?.truncated ? 'truncated' : 'partial';
+  const metric = (label, value, sub = '') => `<div><span>${label}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  metrics.innerHTML = [
+    metric('Output state', `<i class="output-state ${stateClass}">${stateLabel}</i>`),
+    metric('Completion tokens', output?.completionTokens != null ? output.completionTokens.toLocaleString() : '—', 'provider usage'),
+    metric('Visible characters', output ? output.responseChars.toLocaleString() : '—'),
+    metric('Generation time', output?.responseTimeMs != null ? `${(output.responseTimeMs / 1000).toFixed(1)}s` : '—'),
+    metric('Long-task TTFT', output?.ttftMs != null ? `${output.ttftMs.toLocaleString()}ms` : '—'),
+    metric('Long-task TPS', output?.decodeTps != null ? output.decodeTps.toFixed(1) : '—', 'provider tokens'),
+    metric('File markers', output ? `${output.filesComplete}/6` : '—', `${output?.filesEmitted || 0} opened`),
+    metric('Finish reason', escHtml(output?.finishReason || '—'), output?.updatedAt ? fmtTimestamp(output.updatedAt) : ''),
+  ].join('');
+
+  if (copyButton) {
+    copyButton.disabled = !hasResponse;
+    copyButton.onclick = async () => {
+      if (!hasResponse) return;
+      try {
+        await navigator.clipboard.writeText(response);
+        if (feedback) feedback.textContent = '完整回复已复制。';
+      } catch (_) {
+        if (feedback) feedback.textContent = '浏览器拒绝剪贴板访问，请从展开区域手动复制。';
+      }
+    };
+  }
+  if (downloadButton) {
+    downloadButton.disabled = !hasResponse;
+    downloadButton.onclick = () => {
+      if (!hasResponse) return;
+      const blob = new Blob([response], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${shortModel(model).replace(/[^a-z0-9._-]+/gi, '-')}-long-output.txt`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    };
+  }
+  if (feedback) feedback.textContent = '';
+}
+
 function renderExplorer() {
   const model = state.explorerModel;
   const s = state.modelStats[model];
@@ -500,13 +573,15 @@ function renderExplorer() {
   const uptimeColor = s.uptime >= 0.7 ? 'var(--success)' : s.uptime >= 0.4 ? 'var(--warning)' : 'var(--danger)';
   document.getElementById('explorer-stats').innerHTML = `
     <div class="stat-card"><div class="stat-val" style="color:${uptimeColor}">${(s.uptime*100).toFixed(1)}%</div><div class="stat-label">Uptime</div><div class="stat-sub">${s.successCount}/${s.totalRuns} runs</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:var(--success)">${s.capabilityScore != null ? s.capabilityScore.toFixed(0) : '—'}</div><div class="stat-label">Local Suite</div><div class="stat-sub">Programmatic / 100</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:var(--success)">${s.longCompletionTokens != null ? s.longCompletionTokens.toLocaleString() : '—'}</div><div class="stat-label">Long Output</div><div class="stat-sub">completion tokens</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--purple)">${s.intelligence ? s.intelligence.toFixed(0) : '—'}</div><div class="stat-label">Intel Index</div><div class="stat-sub">Artificial Analysis</div></div>
     <div class="stat-card"><div class="stat-val">${s.avgTime ? (s.avgTime/1000).toFixed(2)+'s' : '—'}</div><div class="stat-label">Avg Response</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--warning)">${s.avgTtft ? s.avgTtft.toFixed(0)+'ms' : '—'}</div><div class="stat-label">Avg TTFT</div><div class="stat-sub">Time to 1st Token</div></div>
     <div class="stat-card"><div class="stat-val text-accent">${s.bestTime ? (s.bestTime/1000).toFixed(2)+'s' : '—'}</div><div class="stat-label">Best Response</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--blue)">${s.avgTps ? s.avgTps.toFixed(1)+' t/s' : '—'}</div><div class="stat-label">Avg Throughput</div><div class="stat-sub">${s.throughputSampleCount || 0}/2 valid · CV ${s.throughputCv != null ? (s.throughputCv*100).toFixed(1)+'%' : '—'}</div></div>
   `;
+
+  renderLongOutput(model, s.longOutput);
 
   // Calculate Global Averages
   const allModels = state.modelNames;
@@ -535,23 +610,19 @@ function renderExplorer() {
     if (noCompEl) noCompEl.style.display = 'none';
     if (compCanvas) compCanvas.style.display = 'block';
 
-    // 1. Radar Chart: Model Capability Breakdown
-    const radarLabels = ['Reliability (%)', 'Intelligence Index', 'Avg Response (s)', 'Avg Throughput (t/s)', 'Reasoning Index', 'Coding Index'];
+    // 1. Radar Chart: normalized operational signals only.
+    const radarLabels = ['Reliability', 'Intelligence', 'Response speed', 'Valid throughput'];
     const modelRadarData = [
       s.uptime * 100,
       s.intelligence,
-      s.avgTime ? s.avgTime / 1000 : 0,
-      s.avgTps || 0,
-      Math.min(100, s.intelligence * 1.05),
-      s.intelligence * 0.95
+      s.speedScore || 0,
+      s.tpsScore || 0
     ];
     const avgRadarData = [
       avgUptime,
       avgIntel,
-      avgTimeGlobal,
-      avgTpsGlobal,
-      Math.min(100, avgIntel * 1.05),
-      avgIntel * 0.95
+      avgSpeedScore,
+      avgTpsScore
     ];
 
     destroyChart('explorerRadar');

@@ -3,7 +3,6 @@
   "provider": "deepseek-ai",
   "score": 65,
   "intelligence": null,
-  "local_capability_score": 0.0,
   "uptime": 100.0,
   "avg_response_time_ms": 8066.666666666667,
   "best_response_time_ms": 576,
@@ -13,5 +12,5 @@
   "success_count": 3,
   "wins": 0,
   "last_seen": "2026-08-09T16:20:46Z",
-  "generated_at": "2026-08-09T16:26:23Z"
+  "generated_at": "2026-08-09T17:06:01Z"
 }
