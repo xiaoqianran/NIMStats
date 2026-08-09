@@ -60,11 +60,22 @@ In your forked repo: **Settings → Secrets and variables → Actions → New re
 
 ### 4. Deploy the Dashboard
 
-| Platform | Steps |
-|----------|-------|
+#### GitHub Pages（推荐：用 Actions 部署）
+
+1. 打开仓库 **Settings → Pages**
+2. **Build and deployment → Source** 选 **GitHub Actions**（不要选 “Deploy from a branch”）
+3. 推送 `main` 或手动跑 **Actions → Deploy GitHub Pages → Run workflow**
+4. 几分钟后访问：`https://<你的用户名>.github.io/NIMStats/`
+
+仓库已自带 [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)：
+- `push` 到 `main` 且改动了看板文件 / `history.db` 时自动发布
+- 也可 `workflow_dispatch` 手动发布
+- 只上传 `index.html`、`css/`、`js/`、`history.db`、`top/` 等静态资源，**不会**把 `scripts/` 或 API key 打进站点
+
+| 其他平台 | 步骤 |
+|----------|------|
 | **Cloudflare Pages** | Connect repo → auto-deploys on every push to `main` |
-| **GitHub Pages** | Settings → Pages → Deploy from `main` |
-| **Netlify / Vercel** | Connect repo for instant auto-deploy |
+| **Netlify / Vercel** | Connect repo as static site (root) |
 
 ### 5. Run Your First Benchmark
 
