@@ -30,7 +30,7 @@ jobs:
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
           BATCH_SIZE: "0"
           NIM_MAX_REQUESTS_PER_MINUTE: "40"
-          NIM_MAX_IN_FLIGHT: "40"
+          NIM_MAX_IN_FLIGHT: "400"
           INCLUDE_ALL_CATALOG_MODELS: "1"
           REQUEST_TIMEOUT_SECONDS: "90"
           STALE_AFTER_MINUTES: "180"

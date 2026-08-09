@@ -16,7 +16,7 @@ from build_pages import build_site  # noqa: E402
 from db_utils import sanitize_error  # noqa: E402
 from model_catalog import classify_model, is_chat_model, refresh_models  # noqa: E402
 from rate_limiter import RateLimiter  # noqa: E402
-from rolling_bench import next_batch, run_model  # noqa: E402
+from rolling_bench import build_stage_jobs, next_batch, run_model  # noqa: E402
 
 
 class FakeTime:
@@ -56,6 +56,15 @@ class MonitorTests(unittest.TestCase):
             index, _ = pool.acquire_with_index()
             counts[index] += 1
         self.assertEqual(counts, [40] * 10)
+
+    def test_one_hundred_models_materialize_four_hundred_independent_jobs(self) -> None:
+        models = [f"org/model-{i}" for i in range(100)]
+        jobs = build_stage_jobs(models)
+        self.assertEqual(len(jobs), 400)
+        self.assertEqual({stage for _, stage in jobs}, {
+            "health", "throughput-a", "throughput-b", "capability",
+        })
+        self.assertTrue(all(sum(job[0] == model for job in jobs) == 4 for model in models))
 
     def test_diffusiongemma_is_not_name_filtered(self) -> None:
         model = "google/diffusiongemma-26b-a4b-it"

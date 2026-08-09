@@ -350,21 +350,26 @@ def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str
     return batch, start, (start + batch_size), new_cursor
 
 
-def run_model(
-    model: str,
-    key_pool: ApiKeyPool,
-) -> dict[str, Any]:
-    """Use exactly four globally round-robin calls for every catalog model."""
-    print(f"  [suite] {model}", flush=True)
-    health = chat_completion(
-        model=model,
-        prompt=HEALTH_PROMPT,
-        max_tokens=HEALTH_MAX_TOKENS,
-        stream=True,
-        key_pool=key_pool,
-    )
-    throughput_results = [
-        chat_completion(
+STAGE_NAMES = ("health", "throughput-a", "throughput-b", "capability")
+
+
+def build_stage_jobs(models: list[str]) -> list[tuple[str, str]]:
+    """Materialize every stage up front so response latency cannot gate starts."""
+    return [(model, stage) for model in models for stage in STAGE_NAMES]
+
+
+def run_stage(model: str, stage: str, key_pool: ApiKeyPool) -> dict[str, Any]:
+    """Run one independently scheduled stage; the key pool controls its start."""
+    if stage == "health":
+        return chat_completion(
+            model=model,
+            prompt=HEALTH_PROMPT,
+            max_tokens=HEALTH_MAX_TOKENS,
+            stream=True,
+            key_pool=key_pool,
+        )
+    if stage in ("throughput-a", "throughput-b"):
+        return chat_completion(
             model=model,
             prompt=THROUGHPUT_PROMPT,
             max_tokens=THROUGHPUT_MAX_TOKENS,
@@ -375,15 +380,34 @@ def run_model(
                 "stream_options": {"include_usage": True},
             },
         )
-        for _ in range(2)
-    ]
-    capability = chat_completion(
-        model=model,
-        prompt=CAPABILITY_PROMPT,
-        max_tokens=CAPABILITY_MAX_TOKENS,
-        stream=False,
-        key_pool=key_pool,
-    )
+    if stage == "capability":
+        return chat_completion(
+            model=model,
+            prompt=CAPABILITY_PROMPT,
+            max_tokens=CAPABILITY_MAX_TOKENS,
+            stream=False,
+            key_pool=key_pool,
+        )
+    raise ValueError(f"Unknown benchmark stage: {stage}")
+
+
+def run_model(
+    model: str,
+    key_pool: ApiKeyPool | None,
+    stage_results: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Aggregate four stages; local callers may execute them sequentially."""
+    print(f"  [suite] {model}", flush=True)
+    if stage_results is None:
+        if key_pool is None:
+            raise ValueError("key_pool is required when stage_results are not supplied")
+        stage_results = {
+            stage: run_stage(model, stage, key_pool)
+            for stage in STAGE_NAMES
+        }
+    health = stage_results["health"]
+    throughput_results = [stage_results["throughput-a"], stage_results["throughput-b"]]
+    capability = stage_results["capability"]
 
     all_results = [health, *throughput_results, capability]
     successful_calls = [result for result in all_results if result.get("success")]
@@ -522,34 +546,44 @@ def main() -> int:
     )
 
     all_rows: list[dict[str, Any]] = []
-    default_workers = min(64, max(8, key_pool.key_count * 4))
+    stage_jobs = build_stage_jobs(batch)
+    total_stage_tasks = len(stage_jobs)
+    default_workers = total_stage_tasks
     max_workers = max(1, int(os.getenv("NIM_MAX_IN_FLIGHT", str(default_workers))))
     print(
         f"Request pool: keys={key_pool.key_count} per_key_rpm="
-        f"{os.getenv('NIM_MAX_REQUESTS_PER_MINUTE', '40')} workers={max_workers}",
+        f"{os.getenv('NIM_MAX_REQUESTS_PER_MINUTE', '40')} "
+        f"queued_stages={total_stage_tasks} workers={max_workers}",
         flush=True,
     )
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
+    stage_results_by_model: dict[str, dict[str, dict[str, Any]]] = {
+        model: {} for model in batch
+    }
+    with ThreadPoolExecutor(max_workers=min(max_workers, total_stage_tasks)) as executor:
         futures = {
-            executor.submit(run_model, model, key_pool): model
-            for model in batch
+            executor.submit(run_stage, model, stage, key_pool): (model, stage)
+            for model, stage in stage_jobs
         }
         for future in as_completed(futures):
-            model = futures[future]
+            model, stage = futures[future]
             try:
-                all_rows.append(future.result())
+                stage_results_by_model[model][stage] = future.result()
             except Exception as exc:  # defensive: preserve the rest of the fleet run
-                print(f"  [internal-error] {model}: {type(exc).__name__}: {exc}", flush=True)
-                all_rows.append(
-                    {
-                        "model": model,
-                        "testKind": "suite-v3",
-                        "benchmarkVersion": BENCHMARK_VERSION,
-                        "success": False,
-                        "status": STATUS_ERROR,
-                        "error": f"Internal worker error: {type(exc).__name__}: {exc}",
-                    }
-                )
+                print(f"  [internal-error] {model}/{stage}: {type(exc).__name__}: {exc}", flush=True)
+                stage_results_by_model[model][stage] = {
+                    "success": False,
+                    "status": STATUS_ERROR,
+                    "httpStatus": None,
+                    "responseTime": None,
+                    "timeToFirstToken": None,
+                    "tokensGenerated": None,
+                    "totalTokens": None,
+                    "error": f"Internal worker error: {type(exc).__name__}: {exc}",
+                    "apiKeyIndex": -1,
+                }
+
+    for model in batch:
+        all_rows.append(run_model(model, None, stage_results_by_model[model]))
 
     # Stable persistence and JSON output regardless of completion order.
     all_rows.sort(key=lambda row: row["model"])

@@ -40,13 +40,13 @@ GitHub Actions 默认每 5 分钟运行一次：
 | `NIM_API_KEY` | 可选。兼容旧的单密钥配置 |
 | `ARTIFICIAL_ANALYSIS_API_KEY` | 可选。更新外部 intelligence 分数 |
 
-每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 40 请求/分钟。所有模型的四阶段请求都按全局轮询分配，不绑定探活所用的 Key，并允许多个慢请求同时在途；100 个模型恰好产生 400 次推理调用。目录刷新另有 1 次请求，限流器会自动把超出首分钟容量的请求顺延。
+每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 40 请求/分钟。400 个阶段任务会一次性进入线程池和 10 个限流队列，不等待同一模型的上一阶段返回；每把 Key 每 1.5 秒放行一次。这样慢响应只延迟结果回收，不会阻塞后续请求启动。100 个模型恰好产生 400 次推理调用；目录刷新另有 1 次请求，限流器会自动把超出首分钟容量的请求顺延。
 
 相关环境变量：
 
 ```text
 NIM_MAX_REQUESTS_PER_MINUTE=40
-NIM_MAX_IN_FLIGHT=40
+NIM_MAX_IN_FLIGHT=400
 BATCH_SIZE=0
 INCLUDE_ALL_CATALOG_MODELS=1
 REQUEST_TIMEOUT_SECONDS=90
