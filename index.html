@@ -1,25 +1,25 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="NIMStats - Real-time AI model benchmark dashboard monitoring response times, uptime, errors, and throughput for NIM deployments.">
+<meta name="description" content="xiaoqianran 的 NVIDIA NIM 实时模型观测站：可用性、TTFT、有效吞吐、稳定性与可验证能力评估。">
 <meta name="keywords" content="AI, LLM, benchmarks, response time, NVIDIA NIM, model performance, OpenAI, Mistral, Qwen, leaderboard">
 <meta name="robots" content="index, follow">
-<link rel="canonical" href="https://nimstats.maurodruwel.be/">
+<link rel="canonical" href="https://xiaoqianran.github.io/NIMStats/">
 <!-- Favicon -->
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <!-- Open Graph / Facebook -->
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://nimstats.maurodruwel.be/">
-<meta property="og:title" content="NIMStats - AI Model Benchmark Dashboard">
-<meta property="og:description" content="Real-time performance tracking and head-to-head comparisons for top AI models.">
+<meta property="og:url" content="https://xiaoqianran.github.io/NIMStats/">
+<meta property="og:title" content="NIM Observatory · xiaoqianran">
+<meta property="og:description" content="A live, verifiable NVIDIA NIM model observatory.">
 <!-- Twitter -->
 <meta property="twitter:card" content="summary_large_image">
-<meta property="twitter:url" content="https://nimstats.maurodruwel.be/">
-<meta property="twitter:title" content="NIMStats - AI Model Benchmark Dashboard">
-<meta property="twitter:description" content="Real-time performance tracking and head-to-head comparisons for top AI models.">
-<title>NIMStats - AI Model Benchmark Dashboard</title>
+<meta property="twitter:url" content="https://xiaoqianran.github.io/NIMStats/">
+<meta property="twitter:title" content="NIM Observatory · xiaoqianran">
+<meta property="twitter:description" content="Live availability, speed, stability and capability signals for NVIDIA NIM models.">
+<title>NIM Observatory · xiaoqianran</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -35,20 +35,29 @@
 </div>
 
 <div id="app">
-  <nav>
-    <div class="nav-brand">NIM<span>Stats</span></div>
-    <div class="nav-tabs">
-      <button class="nav-tab active" data-goto="overview">📊 Overview</button>
-      <button class="nav-tab" data-goto="leaderboard">🏆 Leaderboard</button>
-      <button class="nav-tab" data-goto="explorer">🔬 Explorer</button>
-      <button class="nav-tab" data-goto="timeline">⏱ Timeline</button>
-      <button class="nav-tab" data-goto="compare">⚔️ Compare</button>
+  <nav aria-label="Primary navigation">
+    <div class="brand-lockup">
+      <div class="brand-mark">N</div>
+      <div><div class="nav-brand">NIM<span>Observatory</span></div><div class="brand-owner">xiaoqianran / private lab</div></div>
     </div>
-    <button class="theme-toggle" id="theme-toggle" title="Toggle Theme" aria-label="Toggle theme">
-      <span class="theme-icon-light">☀️</span>
-      <span class="theme-icon-dark">🌙</span>
-    </button>
-    <div class="nav-status" id="nav-status"></div>
+    <button class="nav-search" id="global-search-trigger" type="button"><span>⌕</span><span>搜索模型</span><kbd>/</kbd></button>
+    <div class="nav-tabs">
+      <div class="nav-group-label">Workspace</div>
+      <button class="nav-tab active" data-goto="overview"><span class="nav-glyph">01</span>总览</button>
+      <button class="nav-tab" data-goto="discover"><span class="nav-glyph">02</span>发现模型</button>
+      <button class="nav-tab" data-goto="leaderboard"><span class="nav-glyph">03</span>排行榜</button>
+      <button class="nav-tab" data-goto="explorer"><span class="nav-glyph">04</span>模型档案</button>
+      <div class="nav-group-label">Analysis</div>
+      <button class="nav-tab" data-goto="timeline"><span class="nav-glyph">05</span>运行历史</button>
+      <button class="nav-tab" data-goto="compare"><span class="nav-glyph">06</span>模型对比</button>
+    </div>
+    <div class="nav-footer">
+      <div class="nav-status" id="nav-status"></div>
+      <button class="theme-toggle" id="theme-toggle" title="Toggle Theme" aria-label="Toggle theme">
+        <span class="theme-icon-light">Light</span><span class="theme-icon-dark">Dark</span>
+      </button>
+      <a class="repo-link" href="https://github.com/xiaoqianran/NIMStats" target="_blank" rel="noreferrer">GitHub repository ↗</a>
+    </div>
   </nav>
 
   <main>
@@ -60,6 +69,34 @@
 
     <!-- OVERVIEW -->
     <section data-tab="overview" class="active">
+      <div class="hero-panel">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="live-pulse"></span> LIVE MODEL INTELLIGENCE</div>
+          <h1>从“能调用”到<br><span>值得使用。</span></h1>
+          <p>把 NVIDIA NIM 的实时可用性、首字延迟、有效输出吞吐、波动与可验证能力放进同一张决策地图。</p>
+          <div class="hero-actions">
+            <button class="primary-action" data-jump="discover">发现模型</button>
+            <button class="secondary-action" data-jump="leaderboard">查看排行榜</button>
+          </div>
+        </div>
+        <div class="hero-radar" aria-label="Live fleet summary">
+          <div class="radar-ring ring-1"></div><div class="radar-ring ring-2"></div><div class="radar-ring ring-3"></div>
+          <div class="radar-sweep"></div>
+          <div class="radar-core"><strong id="hero-live-count">—</strong><span>LIVE</span></div>
+          <div class="radar-label label-a"><b id="hero-model-count">—</b> models</div>
+          <div class="radar-label label-b"><b>400</b> req/min</div>
+          <div class="radar-label label-c"><b id="hero-suite-count">—</b> scored</div>
+        </div>
+      </div>
+
+      <div class="signal-strip" aria-label="Evaluation dimensions">
+        <div><span>01</span><b>Health</b><small>真实接口可用性</small></div>
+        <div><span>02</span><b>TTFT</b><small>首个非空 Token</small></div>
+        <div><span>03</span><b>Valid TPS</b><small>≥90% 目标输出</small></div>
+        <div><span>04</span><b>Stability</b><small>双样本 CV</small></div>
+        <div><span>05</span><b>Local Suite</b><small>程序化能力判分</small></div>
+        <div><span>06</span><b>Intel</b><small>外部能力指数</small></div>
+      </div>
       <div class="section-header mb-4">
         <div>
           <div class="section-title">Dashboard Overview</div>
@@ -115,12 +152,42 @@
       </div>
     </section>
 
+    <!-- DISCOVER -->
+    <section data-tab="discover">
+      <div class="page-hero compact">
+        <div><div class="eyebrow">MODEL CATALOG</div><h2>发现适合任务的模型</h2><p>按实时状态、能力信号与经过输出完整性校验的性能结果筛选。</p></div>
+        <div class="catalog-stat"><strong id="discover-count">—</strong><span>matching models</span></div>
+      </div>
+      <div class="discover-toolbar">
+        <label class="discover-search"><span>⌕</span><input id="discover-search" type="search" placeholder="搜索模型、组织或系列…"></label>
+        <div class="segmented" id="discover-filters">
+          <button class="active" data-discover-filter="all">全部</button>
+          <button data-discover-filter="live">在线</button>
+          <button data-discover-filter="scored">已评分</button>
+          <button data-discover-filter="fast">有效吞吐</button>
+          <button data-discover-filter="stable">低波动</button>
+        </div>
+      </div>
+      <div class="discover-grid" id="discover-grid"></div>
+    </section>
+
     <!-- LEADERBOARD -->
     <section data-tab="leaderboard">
-      <div class="section-header mb-4">
+      <div class="page-hero compact leaderboard-hero">
         <div>
-          <div class="section-title">Model Leaderboard</div>
-          <div class="section-sub">Ranked by composite score - click a row to explore that model</div>
+          <div class="eyebrow">DECISION BOARD</div>
+          <h2>模型排行榜</h2>
+          <p>不要让一个总分隐藏取舍。切换维度，找到适合你的冠军。</p>
+        </div>
+        <div class="score-formula"><span>综合分</span><b>25%</b> 可用性 <b>15%</b> 响应 <b>15%</b> 吞吐 <b>20%</b> 本地能力 <b>25%</b> Intel</div>
+      </div>
+      <div class="section-header mb-4">
+        <div class="ranking-modes" id="ranking-modes">
+          <button class="active" data-rank-col="score" data-rank-dir="desc">综合</button>
+          <button data-rank-col="capabilityScore" data-rank-dir="desc">本地能力</button>
+          <button data-rank-col="avgTps" data-rank-dir="desc">有效吞吐</button>
+          <button data-rank-col="uptime" data-rank-dir="desc">可靠性</button>
+          <button data-rank-col="avgTtft" data-rank-dir="asc">TTFT</button>
         </div>
         <div class="filter-controls">
           <span class="filter-label">Runs limit:</span>
@@ -133,7 +200,7 @@
         </div>
       </div>
       <div class="table-controls">
-        <input class="search-input" id="lb-search" type="text" placeholder="🔍 Filter by model name…">
+        <input class="search-input" id="lb-search" type="text" placeholder="搜索排行榜…">
       </div>
       <div class="table-wrap">
         <table id="lb-table">

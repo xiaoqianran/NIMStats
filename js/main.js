@@ -168,13 +168,21 @@ function updateAllIndicators() {
 
 // ─── Tab Navigation ───────────────────────────────────────────────────────────
 function switchTab(tabName) {
+  const validTabs = new Set(['overview', 'discover', 'leaderboard', 'explorer', 'timeline', 'compare']);
+  if (!validTabs.has(tabName)) tabName = 'overview';
   state.currentTab = tabName;
   document.querySelectorAll('section[data-tab]').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`section[data-tab="${tabName}"]`)?.classList.add('active');
   document.querySelector(`.nav-tab[data-goto="${tabName}"]`)?.classList.add('active');
+  document.querySelectorAll('.nav-tab[data-goto]').forEach(tab => {
+    if (tab.dataset.goto === tabName) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  });
+  if (window.location.hash !== `#${tabName}`) history.replaceState(null, '', `#${tabName}`);
 
   if (tabName === 'overview') renderOverview();
+  if (tabName === 'discover') renderDiscover();
   if (tabName === 'leaderboard') renderLeaderboard();
   if (tabName === 'explorer') renderExplorer();
   if (tabName === 'timeline') renderTimeline();
@@ -234,6 +242,65 @@ function initLimitFilters() {
   });
 }
 
+function initDiscovery() {
+  const search = document.getElementById('discover-search');
+  if (search) {
+    search.value = state.discoverSearch;
+    search.addEventListener('input', event => {
+      state.discoverSearch = event.target.value;
+      renderDiscover();
+    });
+  }
+
+  document.querySelectorAll('[data-discover-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.discoverFilter = button.dataset.discoverFilter;
+      document.querySelectorAll('[data-discover-filter]').forEach(item => {
+        item.classList.toggle('active', item === button);
+      });
+      renderDiscover();
+    });
+  });
+
+  const openSearch = () => {
+    switchTab('discover');
+    requestAnimationFrame(() => document.getElementById('discover-search')?.focus());
+  };
+  document.getElementById('global-search-trigger')?.addEventListener('click', openSearch);
+  document.addEventListener('keydown', event => {
+    const target = event.target;
+    const typing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+    if (event.key === '/' && !typing) {
+      event.preventDefault();
+      openSearch();
+    }
+  });
+}
+
+function initRankingModes() {
+  document.querySelectorAll('[data-rank-col]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.lbSort = { col: button.dataset.rankCol, dir: button.dataset.rankDir || 'desc' };
+      document.querySelectorAll('[data-rank-col]').forEach(item => item.classList.toggle('active', item === button));
+      syncLeaderboardHeader();
+      renderLeaderboard();
+    });
+  });
+  syncLeaderboardHeader();
+}
+
+function syncLeaderboardHeader() {
+  document.querySelectorAll('#lb-table thead th').forEach(th => {
+    const active = th.dataset.col === state.lbSort.col;
+    th.classList.toggle('sorted', active);
+    const arrow = th.querySelector('.sort-arrow');
+    if (arrow) arrow.textContent = active ? (state.lbSort.dir === 'desc' ? '↓' : '↑') : '';
+  });
+  document.querySelectorAll('[data-rank-col]').forEach(button => {
+    button.classList.toggle('active', button.dataset.rankCol === state.lbSort.col);
+  });
+}
+
 // ─── Initialization ───────────────────────────────────────────────────────────
 async function init() {
   try {
@@ -287,6 +354,13 @@ async function init() {
 
     // Init leaderboard sort
     initLeaderboardSort();
+    initRankingModes();
+
+    // Discovery, global search and overview shortcuts
+    initDiscovery();
+    document.querySelectorAll('[data-jump]').forEach(button => {
+      button.addEventListener('click', () => switchTab(button.dataset.jump));
+    });
 
     // Limit filters
     initLimitFilters();
@@ -307,8 +381,10 @@ async function init() {
       btn.addEventListener('click', () => switchTab(btn.dataset.goto));
     });
 
+    window.addEventListener('hashchange', () => switchTab(window.location.hash.slice(1)));
+
     // Initial render
-    renderOverview();
+    switchTab(window.location.hash.slice(1) || 'overview');
 
     // Show app
     document.getElementById('loading').style.display = 'none';

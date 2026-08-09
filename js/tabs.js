@@ -20,13 +20,21 @@ function renderOverview() {
   const liveGone = modelNames.filter(m => modelStats[m]?.displayStatus === 'GONE').length;
   const liveStale = modelNames.filter(m => modelStats[m]?.displayStatus === 'STALE').length;
   const liveUnknown = modelNames.filter(m => !['AVAILABLE','GONE','STALE'].includes(modelStats[m]?.displayStatus)).length;
+  const suiteCount = modelNames.filter(m => modelStats[m]?.capabilityScore != null).length;
+
+  const heroLive = document.getElementById('hero-live-count');
+  const heroModels = document.getElementById('hero-model-count');
+  const heroSuite = document.getElementById('hero-suite-count');
+  if (heroLive) heroLive.textContent = liveAvail;
+  if (heroModels) heroModels.textContent = modelNames.length;
+  if (heroSuite) heroSuite.textContent = suiteCount;
 
   const kpiData = [
-    { icon: '🔁', label: 'Total Batches', val: totalRuns, sub: (() => { const rr = rawRuns?.length ? rawRuns : runs; return `${rr[0]?.timestamp?.slice(0,10) || ''} → ${rr[rr.length-1]?.timestamp?.slice(0,10) || ''} · each batch ≈9 models`; })(), decimals: 0 },
-    { icon: '✅', label: 'Live Available', val: liveAvail, decimals: 0, sub: `${liveGone} gone · ${liveStale} stale · ${liveUnknown} other` },
-    { icon: '⚡', label: 'Avg Best Response', val: bestTimeVal / 1000, suffix: 's', decimals: 2, sub: bestTimeModel ? shortModel(bestTimeModel) : '' },
-    { icon: '🚀', label: 'Avg Best Throughput', val: bestTpsVal, suffix: ' t/s', decimals: 1, sub: bestTpsModel ? shortModel(bestTpsModel) : '' },
-    { icon: '🏅', label: 'Most Reliable', val: (modelStats[mostReliable]?.uptime || 0) * 100, suffix: '%', decimals: 1, sub: mostReliable ? shortModel(mostReliable) : '' },
+    { icon: 'RUN', label: 'Total Batches', val: totalRuns, sub: (() => { const rr = rawRuns?.length ? rawRuns : runs; return `${rr[0]?.timestamp?.slice(0,10) || ''} → ${rr[rr.length-1]?.timestamp?.slice(0,10) || ''} · full-fleet rolling`; })(), decimals: 0 },
+    { icon: 'UP', label: 'Live Available', val: liveAvail, decimals: 0, sub: `${liveGone} gone · ${liveStale} stale · ${liveUnknown} other` },
+    { icon: 'E2E', label: 'Avg Best Response', val: bestTimeVal / 1000, suffix: 's', decimals: 2, sub: bestTimeModel ? shortModel(bestTimeModel) : '' },
+    { icon: 'TPS', label: 'Avg Best Throughput', val: bestTpsVal, suffix: ' t/s', decimals: 1, sub: bestTpsModel ? shortModel(bestTpsModel) : '' },
+    { icon: 'SLA', label: 'Most Reliable', val: (modelStats[mostReliable]?.uptime || 0) * 100, suffix: '%', decimals: 1, sub: mostReliable ? shortModel(mostReliable) : '' },
   ];
 
   const kpiGrid = document.getElementById('kpi-grid');
@@ -303,14 +311,88 @@ function renderOverview() {
   }
 }
 
+// ─── Discover Tab ────────────────────────────────────────────────────────────
+function inferModelKind(model) {
+  const name = model.toLowerCase();
+  if (/embed|retriev/.test(name)) return 'Embedding';
+  if (/rerank|rankqa/.test(name)) return 'Rerank';
+  if (/guard|safety|shield/.test(name)) return 'Safety';
+  if (/reward/.test(name)) return 'Reward';
+  if (/vision|vl-|vlm|ocr|parse|diffusion/.test(name)) return 'Multimodal';
+  if (/code|coder|devstral/.test(name)) return 'Coding';
+  if (/reason|math/.test(name)) return 'Reasoning';
+  return 'Chat';
+}
+
+function renderDiscover() {
+  const grid = document.getElementById('discover-grid');
+  if (!grid) return;
+  const query = (state.discoverSearch || '').trim().toLowerCase();
+  const filter = state.discoverFilter || 'all';
+  let models = [...state.modelNames].filter(model => {
+    const s = state.modelStats[model] || {};
+    if (query && !model.toLowerCase().includes(query) && !providerMeta(model).name.toLowerCase().includes(query)) return false;
+    if (filter === 'live' && s.displayStatus !== 'AVAILABLE') return false;
+    if (filter === 'scored' && s.capabilityScore == null) return false;
+    if (filter === 'fast' && s.avgTps == null) return false;
+    if (filter === 'stable' && !(s.throughputCv != null && s.throughputCv <= 0.1)) return false;
+    return true;
+  });
+  models.sort((a, b) => (state.modelStats[b]?.score || 0) - (state.modelStats[a]?.score || 0));
+  const count = document.getElementById('discover-count');
+  if (count) count.textContent = models.length;
+
+  if (!models.length) {
+    grid.innerHTML = '<div class="discover-empty"><b>没有匹配的模型</b><span>调整筛选条件或搜索词。</span></div>';
+    return;
+  }
+
+  grid.innerHTML = models.map(model => {
+    const s = state.modelStats[model] || {};
+    const status = s.displayStatus || 'UNKNOWN';
+    const statusClass = status === 'AVAILABLE' ? 'live' : status === 'STALE' ? 'stale' : 'offline';
+    const score = s.score || 0;
+    const cv = s.throughputCv != null ? `${(s.throughputCv * 100).toFixed(1)}% CV` : 'CV —';
+    return `<article class="model-card" data-model="${escHtml(model)}" tabindex="0">
+      <div class="model-card-top">
+        <div>${providerChip(model, true)}<span class="kind-chip">${inferModelKind(model)}</span></div>
+        <span class="live-badge ${statusClass}"><i></i>${status}</span>
+      </div>
+      <h3>${escHtml(shortModel(model))}</h3>
+      <div class="model-id">${escHtml(model)}</div>
+      <div class="model-score-row">
+        <div class="score-orbit" style="--score:${score}"><strong>${score}</strong><span>overall</span></div>
+        <div class="model-primary-metrics">
+          <div><span>Local Suite</span><b>${s.capabilityScore != null ? s.capabilityScore.toFixed(0) : '—'}</b></div>
+          <div><span>Intel</span><b>${s.intelligence != null ? s.intelligence.toFixed(0) : '—'}</b></div>
+        </div>
+      </div>
+      <div class="model-metric-grid">
+        <div><span>TTFT</span><b>${s.avgTtft ? s.avgTtft.toFixed(0) + ' ms' : '—'}</b></div>
+        <div><span>Valid TPS</span><b>${s.avgTps ? s.avgTps.toFixed(1) : '—'}</b></div>
+        <div><span>Uptime</span><b>${(s.uptime * 100).toFixed(1)}%</b></div>
+      </div>
+      <div class="model-card-footer"><span>${cv} · ${s.throughputSampleCount || 0}/2 samples</span><button type="button">打开档案 →</button></div>
+    </article>`;
+  }).join('');
+
+  grid.querySelectorAll('.model-card').forEach(card => {
+    const open = () => {
+      state.explorerModel = card.dataset.model;
+      populateExplorerSelect();
+      switchTab('explorer');
+    };
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); }
+    });
+  });
+}
+
 // ─── Leaderboard Tab ──────────────────────────────────────────────────────────
 function renderLeaderboard() {
   const { modelNames, modelStats } = state;
-  const scores = [...modelNames].sort((a, b) => modelStats[b].score - modelStats[a].score);
-  const ranks = {};
-  scores.forEach((m, i) => { ranks[m] = i + 1; });
-
-  state.lbData = modelNames.map(m => ({ model: m, rank: ranks[m], ...modelStats[m] }));
+  state.lbData = modelNames.map(m => ({ model: m, ...modelStats[m] }));
   renderLbTable();
 }
 
@@ -330,6 +412,7 @@ function renderLbTable() {
     return lbSort.dir === 'asc' ? av - bv : bv - av;
   });
 
+  rows.forEach((row, index) => { row.rank = index + 1; });
   const tbody = document.getElementById('lb-body');
   tbody.innerHTML = rows.map((r, i) => {
     const uptimePct = (r.uptime * 100).toFixed(1);
@@ -381,11 +464,9 @@ function initLeaderboardSort() {
         state.lbSort.dir = state.lbSort.dir === 'desc' ? 'asc' : 'desc';
       } else {
         state.lbSort.col = col;
-        state.lbSort.dir = 'desc';
+        state.lbSort.dir = col === 'avgTtft' || col === 'avgTime' || col === 'bestTime' ? 'asc' : 'desc';
       }
-      document.querySelectorAll('#lb-table thead th').forEach(t => t.classList.remove('sorted'));
-      th.classList.add('sorted');
-      th.querySelector('.sort-arrow').textContent = state.lbSort.dir === 'desc' ? '↓' : '↑';
+      syncLeaderboardHeader();
       renderLbTable();
     });
   });

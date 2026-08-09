@@ -22,6 +22,8 @@ GitHub Actions 默认每 5 分钟运行一次：
    - **Capability**：对 8 条内嵌记录执行筛选、计算、排序和校验码生成，返回严格 JSON，由本地代码按 7 项条件计 0–100 分。
 5. 更新 `history.db`、排行榜和公开静态端点，再部署到 GitHub Pages。
 
+前端按“观测 → 发现 → 决策 → 深入分析”重新组织：总览展示全舰队健康信号，Discover 支持按在线、已评分、有效吞吐和低波动筛选，排行榜可分别按综合分、本地能力、有效吞吐、可靠性与 TTFT 排序；模型档案、运行历史和双模型对比保留更细的诊断信息。各工作区使用 `#discover`、`#leaderboard` 等可复制的页内地址，并为窄屏和减少动态效果偏好做了适配。
+
 吞吐使用 NVIDIA API 返回的真实 `completion_tokens`，不再用词数估算 token。若流式端点不返回 usage，只记录明确标注的字符吞吐用于诊断，不会把它当成 TPS。能力测试不依赖联网知识，也不调用另一个模型充当裁判，因而每次可重复、可审计。
 
 模型会显示为 `AVAILABLE`、`GONE`、`UNAUTHORIZED`、`RATE_LIMITED`、`TIMEOUT`、`ERROR`、`STALE` 或 `UNKNOWN`。`AVAILABLE` 必须来自真实成功响应；仅出现在模型目录中不会被当作可用。
