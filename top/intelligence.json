@@ -1,16 +1,16 @@
 {
-  "best_model": "meta/llama-3.2-90b-vision-instruct",
-  "provider": "meta",
+  "best_model": "mistralai/mistral-nemotron",
+  "provider": "mistralai",
   "score": 65,
   "intelligence": null,
   "uptime": 100.0,
-  "avg_response_time_ms": 24481.0,
-  "best_response_time_ms": 17666,
-  "avg_time_to_first_token_ms": 14428.0,
-  "avg_throughput_tps": 4.5,
+  "avg_response_time_ms": 1967.0,
+  "best_response_time_ms": 1739,
+  "avg_time_to_first_token_ms": 986.0,
+  "avg_throughput_tps": 46.0,
   "total_runs": 2,
   "success_count": 2,
-  "wins": 0,
-  "last_seen": "2026-08-09T10:26:31Z",
-  "generated_at": "2026-08-09T10:26:31Z"
+  "wins": 1,
+  "last_seen": "2026-08-09T11:01:19Z",
+  "generated_at": "2026-08-09T11:01:19Z"
 }

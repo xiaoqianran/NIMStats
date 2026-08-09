@@ -1,16 +1,16 @@
 {
-  "best_model": "minimaxai/minimax-m3",
-  "provider": "minimaxai",
-  "score": 39,
+  "best_model": "mistralai/mistral-nemotron",
+  "provider": "mistralai",
+  "score": 63,
   "intelligence": null,
-  "uptime": 50.0,
-  "avg_response_time_ms": 14545.0,
-  "best_response_time_ms": 14545,
-  "avg_time_to_first_token_ms": 11240.0,
-  "avg_throughput_tps": null,
+  "uptime": 100.0,
+  "avg_response_time_ms": 1967.0,
+  "best_response_time_ms": 1739,
+  "avg_time_to_first_token_ms": 986.0,
+  "avg_throughput_tps": 46.0,
   "total_runs": 2,
-  "success_count": 1,
+  "success_count": 2,
   "wins": 1,
-  "last_seen": "2026-08-09T10:26:31Z",
-  "generated_at": "2026-08-09T10:26:31Z"
+  "last_seen": "2026-08-09T11:01:19Z",
+  "generated_at": "2026-08-09T11:01:19Z"
 }
