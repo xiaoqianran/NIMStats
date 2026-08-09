@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fetch / filter NVIDIA NIM models for chat/completions benchmarks.
+"""Discover NVIDIA NIM models for real chat/completions probes.
 
-- Pulls https://integrate.api.nvidia.com/v1/models every run
+- Pulls https://integrate.api.nvidia.com/v1/models for every configured key
+- Unions key-specific catalogs and retains previously discovered model IDs
 - Writes scripts/models_cache.json on success
 - Falls back to cache (then a tiny static list) if pull fails
-- Filters out embeddings, rerankers, image-gen, reward, OCR/parse, safety-only, etc.
+- Can probe the complete catalog so name heuristics never hide a callable model
 """
 
 from __future__ import annotations
@@ -15,9 +16,12 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from api_key_pool import load_api_keys
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CACHE_PATH = SCRIPT_DIR / "models_cache.json"
@@ -123,6 +127,10 @@ def is_chat_model(model_id: str) -> bool:
     """Return True if model_id looks suitable for /v1/chat/completions."""
     if not model_id or "/" not in model_id:
         return False
+    # DiffusionGemma is a text/chat model despite its family name. Generic
+    # substring filters used to hide it from the dashboard without a probe.
+    if "diffusiongemma" in model_id.lower():
+        return True
     if _EXCLUDE_RE.search(model_id):
         return False
     return True
@@ -130,6 +138,8 @@ def is_chat_model(model_id: str) -> bool:
 
 def classify_model(model_id: str) -> str:
     low = model_id.lower()
+    if "diffusiongemma" in low:
+        return "chat"
     if re.search(r"embed|bge[-_]|arctic-embed|nvclip|\bclip\b|e5-v|gte-", low):
         return "embedding"
     if re.search(r"rerank|ranker|ranking|cross-?encoder", low):
@@ -224,23 +234,94 @@ def load_cache() -> list[dict[str, Any]] | None:
     return models
 
 
-def refresh_models(api_key: str | None = None, verbose: bool = True) -> tuple[list[dict[str, Any]], str]:
-    """Return (models, source) where source is remote|cache|fallback."""
-    try:
-        models = fetch_remote_models(api_key=api_key)
-        save_cache(models, source="remote")
+def _union_models(catalogs: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for models in catalogs:
+        for model in models:
+            model_id = model.get("id")
+            if model_id:
+                by_id[model_id] = {**by_id.get(model_id, {}), **model}
+    return [by_id[model_id] for model_id in sorted(by_id)]
+
+
+def refresh_models(
+    api_key: str | None = None,
+    *,
+    api_keys: list[str] | None = None,
+    verbose: bool = True,
+) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+    """Return ``(models, source, fetch_metadata)``."""
+    keys = list(
+        dict.fromkeys(
+            api_keys
+            or ([api_key] if api_key else load_api_keys())
+            or ([API_KEY] if API_KEY else [])
+        )
+    )
+    keys = [key for key in keys if key]
+    catalogs: list[list[dict[str, Any]]] = []
+    model_key_indexes: dict[str, list[int]] = {}
+    failures = 0
+    if keys:
+        with ThreadPoolExecutor(max_workers=min(16, len(keys))) as executor:
+            futures = {
+                executor.submit(fetch_remote_models, key): index
+                for index, key in enumerate(keys)
+            }
+            for future in as_completed(futures):
+                try:
+                    catalog = future.result()
+                    catalogs.append(catalog)
+                    key_index = futures[future]
+                    for model in catalog:
+                        model_key_indexes.setdefault(model["id"], []).append(key_index)
+                except Exception:  # never print errors that might contain key material
+                    failures += 1
+
+    if catalogs:
+        active = _union_models(catalogs)
+        cached = load_cache() or []
+        # Keep retired or temporarily hidden IDs so a real request can mark them
+        # GONE instead of silently deleting them from the dashboard.
+        models = _union_models([cached, active])
+        active_ids = {model["id"] for model in active}
+        for model in models:
+            model["catalog_active"] = model["id"] in active_ids
+        source = "remote-pool" if len(keys) > 1 else "remote"
+        save_cache(models, source=source)
         if verbose:
-            print(f"[model_catalog] Fetched {len(models)} models from {API_BASE}/models → {CACHE_PATH.name}")
-        return models, "remote"
-    except Exception as exc:  # noqa: BLE001 - network / API failures are expected
-        if verbose:
-            print(f"[model_catalog] Remote fetch failed: {exc}", file=sys.stderr)
+            print(
+                f"[model_catalog] catalogs={len(catalogs)}/{len(keys)} "
+                f"active_union={len(active)} retained_total={len(models)} "
+                f"→ {CACHE_PATH.name}"
+            )
+        return models, source, {
+            "catalog_requests": len(keys),
+            "catalog_successes": len(catalogs),
+            "catalog_failures": failures,
+            "active_catalog": len(active),
+            "retained_catalog": len(models),
+            "model_key_indexes": model_key_indexes,
+        }
+
+    if verbose:
+        print(
+            f"[model_catalog] All {len(keys)} remote catalog requests failed",
+            file=sys.stderr,
+        )
 
     cached = load_cache()
     if cached is not None:
         if verbose:
             print(f"[model_catalog] Using local cache ({len(cached)} models) from {CACHE_PATH.name}", file=sys.stderr)
-        return cached, "cache"
+        return cached, "cache", {
+            "catalog_requests": len(keys),
+            "catalog_successes": 0,
+            "catalog_failures": failures,
+            "active_catalog": 0,
+            "retained_catalog": len(cached),
+            "model_key_indexes": {},
+        }
 
     if verbose:
         print(f"[model_catalog] No cache; using FALLBACK_MODELS ({len(FALLBACK_MODELS)})", file=sys.stderr)
@@ -254,7 +335,14 @@ def refresh_models(api_key: str | None = None, verbose: bool = True) -> tuple[li
         }
         for mid in FALLBACK_MODELS
     ]
-    return fallback, "fallback"
+    return fallback, "fallback", {
+        "catalog_requests": len(keys),
+        "catalog_successes": 0,
+        "catalog_failures": failures,
+        "active_catalog": 0,
+        "retained_catalog": len(fallback),
+        "model_key_indexes": {},
+    }
 
 
 def filter_chat_models(models: list[dict[str, Any]]) -> list[str]:
@@ -289,12 +377,31 @@ def filter_chat_models(models: list[dict[str, Any]]) -> list[str]:
 
 def get_benchmark_models(
     api_key: str | None = None,
+    api_keys: list[str] | None = None,
     verbose: bool = True,
     limit: int | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    models, source = refresh_models(api_key=api_key, verbose=verbose)
+    models, source, fetch_meta = refresh_models(
+        api_key=api_key,
+        api_keys=api_keys,
+        verbose=verbose,
+    )
     chat_ids = filter_chat_models(models)
     chat_total = len(chat_ids)
+
+    include_all = os.getenv("INCLUDE_ALL_CATALOG_MODELS", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    if include_all:
+        deny = _read_name_file(DENYLIST_PATH)
+        selected_ids = sorted(
+            {m.get("id") for m in models if m.get("id") and m.get("id") not in deny}
+            | (_read_name_file(ALLOWLIST_PATH) - deny)
+        )
+    else:
+        selected_ids = chat_ids
 
     limit_env = os.getenv("MODEL_LIMIT", "").strip()
     if limit is None and limit_env:
@@ -305,7 +412,7 @@ def get_benchmark_models(
     applied_limit = None
     if limit is not None and limit > 0:
         applied_limit = limit
-        chat_ids = chat_ids[:limit]
+        selected_ids = selected_ids[:limit]
 
     # breakdown
     by_cat: dict[str, int] = {}
@@ -317,21 +424,23 @@ def get_benchmark_models(
         "source": source,
         "total_catalog": len(models),
         "chat_count": chat_total,
-        "testing_count": len(chat_ids),
+        "testing_count": len(selected_ids),
+        "include_all_catalog_models": include_all,
         "limit": applied_limit,
         "by_category": by_cat,
         "cache_path": str(CACHE_PATH),
+        **fetch_meta,
     }
     if verbose:
         print(
             f"[model_catalog] source={source} catalog={len(models)} "
             f"chat_eligible={meta['chat_count']} categories={by_cat}"
         )
-    return chat_ids, meta
+    return selected_ids, meta
 
 
 def main() -> int:
-    """CLI: refresh cache and print filtered chat models."""
+    """CLI: refresh cache and print the selected benchmark fleet."""
     ids, meta = get_benchmark_models(verbose=True)
     print(json.dumps({"meta": meta, "models": ids}, indent=2, ensure_ascii=False))
     return 0

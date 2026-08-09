@@ -1,414 +1,113 @@
-<div align="center">
+# NIMStats（个人自用版）
 
-[![NIMStats Banner](https://capsule-render.vercel.app/api?type=waving&color=76b900&height=220&section=header&text=NIMStats&fontSize=90&fontColor=ffffff&animation=fadeIn&fontAlignY=38&desc=Real-Time%20NVIDIA%20NIM%20Benchmark%20Dashboard&descSize=22&descAlignY=60&descAlign=50)](https://nimstats.maurodruwel.be/)
+这是 `xiaoqianran/NIMStats` 的个人 NVIDIA NIM 可用性与性能监控面板，用于学习、实验和自用数据观察，不是商业服务，也不代表 NVIDIA 或原项目作者。
 
-[![CI](https://github.com/MauroDruwel/NIMStats/actions/workflows/benchmark.yml/badge.svg)](https://github.com/MauroDruwel/NIMStats/actions)
-[![Live Dashboard](https://img.shields.io/badge/🌐%20live-nimstats.maurodruwel.be-76b900?style=flat-square)](https://nimstats.maurodruwel.be/)
-[![Models](https://img.shields.io/badge/models-dynamic%20catalog-blue?style=flat-square)](https://build.nvidia.com/models)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/MauroDruwel/NIMStats/pulls)
-[![Stars](https://img.shields.io/github/stars/MauroDruwel/NIMStats?style=flat-square&color=gold)](https://github.com/MauroDruwel/NIMStats/stargazers)
+- 在线面板：<https://xiaoqianran.github.io/NIMStats/>
+- 当前仓库：<https://github.com/xiaoqianran/NIMStats>
+- 原始项目：<https://github.com/MauroDruwel/NIMStats>
+- 原项目作者：[MauroDruwel](https://github.com/MauroDruwel)
 
-<br/>
+本仓库基于原项目进行学习性修改。原项目的创意、初始实现和历史贡献归原作者及其贡献者所有；此处仅保留个人维护版本，供学习教育目的使用。
 
-> **Community-driven benchmarking of NVIDIA NIM hosted models — dynamic `/v1/models` catalog, live availability probe, then bench only callable chat models.**
+## 当前版本做了什么
 
-<br/>
+GitHub Actions 默认每 5 分钟运行一次：
 
-**[🚀 View Live Dashboard](https://nimstats.maurodruwel.be/) · [📖 Docs](#-quick-start) · [🤝 Contribute](#-contributing) · [💬 Discussions](https://github.com/MauroDruwel/NIMStats/discussions)**
+1. 使用所有已配置密钥分别请求 NVIDIA `GET /v1/models`。
+2. 合并不同密钥能看到的目录，并保留过去发现、后来下线的模型。
+3. 对目录中的每个模型真实调用 `/v1/chat/completions`，不再只靠模型名称猜测它是否可用。
+4. 用一次固定、无知识偏向的流式输出任务同时测量：
+   - 是否可请求；
+   - 首 Token 延迟（TTFT）；
+   - 总响应时间；
+   - 生成吞吐；
+   - 是否精确复现固定 payload。
+5. 更新 `history.db`、排行榜和公开静态端点，再部署到 GitHub Pages。
 
-</div>
+模型会显示为 `AVAILABLE`、`GONE`、`UNAUTHORIZED`、`RATE_LIMITED`、`TIMEOUT`、`ERROR`、`STALE` 或 `UNKNOWN`。`AVAILABLE` 必须来自真实成功响应；仅出现在模型目录中不会被当作可用。
 
----
+`google/diffusiongemma-*` 这类名字中包含 `diffusion`、但实际可走聊天接口的模型不会再被名称过滤器直接隐藏。默认还会测试完整目录，因此新的或命名特殊的模型会先经过真实请求再决定状态。
 
-## ✨ What is NIMStats?
+## 密钥池与限速
 
-NIMStats discovers models from NVIDIA `GET /v1/models`, filters to chat candidates (drops embed/rerank/image/…), **live-probes** which are actually callable for your API key (many catalog entries are retired/`404 Function not found for account`), then benchmarks only **AVAILABLE** models. Results publish to a static dashboard via GitHub Actions — no servers required.
+密钥只存放在 GitHub Actions 的加密 Secret 中，绝不能提交到仓库、数据库、日志或 Pages artifact。
 
-<div align="center">
+在 **Settings → Secrets and variables → Actions** 中配置：
 
-| 🏎️ Hourly Benchmarks | 📊 Interactive Charts | 🔁 Zero Infrastructure | 🌍 Fully Open-Source |
-|:---:|:---:|:---:|:---:|
-| Automatic via GitHub Actions | Response time, throughput & trends | Static site + free CI/CD | Fork and self-host in minutes |
+| Secret | 用途 |
+|---|---|
+| `NIM_API_KEYS` | 推荐。多个密钥，以换行或逗号分隔 |
+| `NIM_API_KEY` | 可选。兼容旧的单密钥配置 |
+| `ARTIFICIAL_ANALYSIS_API_KEY` | 可选。更新外部 intelligence 分数 |
 
-</div>
+每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 40 请求/分钟。请求按轮询方式分配给密钥，并允许多个慢请求同时在途；增加并发不会突破单密钥限制。
 
----
+相关环境变量：
 
-
-## 🔄 Rolling monitor (current strategy)
-
-NIMStats is a **continuous rolling fleet monitor**, not an hourly full-fleet snapshot.
-
-| Piece | Behavior |
-|-------|----------|
-| Schedule | GitHub Actions every **10 minutes** (`*/10 * * * *`) |
-| Batch | Each run tests the next **9** chat models (cursor wraps) |
-| Catalog | `GET /v1/models` → filter embed/rerank/image/… → stable sorted fleet |
-| Requests | **No separate probe.** Health call sets availability; Throughput call measures TPS |
-| Health | `Reply with exactly: OK`, `temperature=0`, `max_tokens=8`, stream → TTFT |
-| Throughput | Fixed 1..40 number list, `temperature=0`, stream → e2e + decode TPS |
-| Rate limit | Client limiter **≤ 40 req/min** (`NIM_MAX_REQUESTS_PER_MINUTE`) |
-| Status | Per-model `current_status`, `last_checked_at`, `last_success_at` in `history.db` |
-| STALE | If not re-checked within `STALE_AFTER_MINUTES` (default 180), UI shows **STALE** |
-| Pages | Regenerates after **each batch** (not after full fleet cycle) |
-| Intelligence | Artificial Analysis only — not derived from our prompts |
-
-```bash
-# Local one batch
-export NIM_API_KEY=...
-python3 -u scripts/rolling_bench.py
-
-# Env knobs
-BATCH_SIZE=9
+```text
 NIM_MAX_REQUESTS_PER_MINUTE=40
+NIM_MAX_IN_FLIGHT=40
+BATCH_SIZE=0
+INCLUDE_ALL_CATALOG_MODELS=1
+REQUEST_TIMEOUT_SECONDS=90
+BENCHMARK_MAX_TOKENS=192
 STALE_AFTER_MINUTES=180
 ```
 
-## ⚡ Quick Start
+`BATCH_SIZE=0` 表示每次检查整个目录。若只想做本地小规模测试，可以设置正整数或使用 `MODEL_LIMIT`。
 
-> Get your own benchmarking dashboard running in under 5 minutes.
+## GitHub Pages 部署
 
-### 1. Fork & Clone
+仓库的 Pages Source 必须设置为 **GitHub Actions**。
 
-```bash
-git clone https://github.com/MauroDruwel/NIMStats.git
-cd NIMStats
-```
+部署只有一条正式路径：`.github/workflows/deploy-pages.yml`。基准 workflow 提交新数据后会显式 dispatch 该 workflow，因此部署运行使用的是新提交的准确 SHA，不依赖机器人 push 触发另一个 workflow。
 
-### 2. Get a Free API Key
+构建脚本 `scripts/build_pages.py` 会：
 
-Visit **[build.nvidia.com](https://build.nvidia.com)** → Create a free account → Copy your API key.
+- 只复制看板所需的白名单静态文件；
+- 对 `history.db` 执行 SQLite 完整性和表结构检查；
+- 生成 GitHub Pages 可识别的无扩展名 API 路由；
+- 确保密钥、临时结果和基准脚本不会进入站点 artifact。
 
-### 3. Add the Secret
+公开端点：
 
-In your forked repo: **Settings → Secrets and variables → Actions → New repository secret**
+| 数据 | JSON | 纯文本 |
+|---|---|---|
+| 综合最佳 | [`/top/`](https://xiaoqianran.github.io/NIMStats/top/) | [`/top/model`](https://xiaoqianran.github.io/NIMStats/top/model) |
+| 速度最佳 | [`/top/speed`](https://xiaoqianran.github.io/NIMStats/top/speed) | [`/top/speed/model`](https://xiaoqianran.github.io/NIMStats/top/speed/model) |
+| Intelligence 最佳 | [`/top/intelligence`](https://xiaoqianran.github.io/NIMStats/top/intelligence) | [`/top/intelligence/model`](https://xiaoqianran.github.io/NIMStats/top/intelligence/model) |
 
-| Name | Value |
-|------|-------|
-| `NIM_API_KEY` | Your NVIDIA NIM API key |
+也可以使用显式文件路径，例如 `top/speed.json` 和 `top/speed.txt`。
 
-### 4. Deploy the Dashboard
-
-#### GitHub Pages（推荐：用 Actions 部署）
-
-1. 打开仓库 **Settings → Pages**
-2. **Build and deployment → Source** 选 **GitHub Actions**（不要选 “Deploy from a branch”）
-3. 推送 `main` 或手动跑 **Actions → Deploy GitHub Pages → Run workflow**
-4. 几分钟后访问：`https://<你的用户名>.github.io/NIMStats/`
-
-仓库已自带 [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml)：
-- `push` 到 `main` 且改动了看板文件 / `history.db` 时自动发布
-- 也可 `workflow_dispatch` 手动发布
-- 只上传 `index.html`、`css/`、`js/`、`history.db`、`top/` 等静态资源，**不会**把 `scripts/` 或 API key 打进站点
-
-| 其他平台 | 步骤 |
-|----------|------|
-| **Cloudflare Pages** | Connect repo → auto-deploys on every push to `main` |
-| **Netlify / Vercel** | Connect repo as static site (root) |
-
-### 5. Run Your First Benchmark
-
-**Actions → Benchmark NVIDIA NIM Models → Run workflow**
-
-That's it — your dashboard auto-refreshes every hour. ✨
-
----
-
-## 📊 Dashboard Features
-
-<div align="center">
-
-| Tab | What you get |
-|-----|-------------|
-| **📊 Overview** | 5 animated KPI cards · success trend charts · top-10 speed & throughput bars · model reliability pills |
-| **🏆 Leaderboard** | Composite score rankings · sortable columns · SVG sparklines · trend indicators (↑↓→) · provider chips |
-| **🔬 Explorer** | Per-model deep dive · response time history chart · error breakdown donut · availability heatmap |
-| **⏱ Timeline** | Filterable run history (All / 24h / 48h / 7d) · expandable run cards with full per-model detail |
-| **⚔️ Compare** | Head-to-head overlay chart · win-rate stats · side-by-side metric comparison |
-| **🔗 Public APIs** | Multiple category endpoints: `/top` (balanced), `/top/speed` (speed & tps), and `/top/intelligence` (capabilities) in both JSON and raw `.txt` formats. Perfect for integration with local scripts, scripts, or apps |
-
-</div>
-
----
-
-## 🔌 Developer APIs
-
-NIMStats exposes lightweight, static API endpoints for querying the #1 model in different performance categories. Every time the hourly benchmark completes, these endpoints are updated.
-
-### Available Endpoints
-
-| Category | Endpoint (JSON) | Endpoint (Plain Text) | Scoring Balance |
-| :--- | :--- | :--- | :--- |
-| **⚖️ Balanced (Overall)** | [`/top`](https://nimstats.maurodruwel.be/top) | [`/top/model`](https://nimstats.maurodruwel.be/top/model) | **30%** Uptime + **30%** Intelligence + **20%** Avg Time + **20%** Throughput |
-| **🏎️ Speed & Throughput** | [`/top/speed`](https://nimstats.maurodruwel.be/top/speed) | [`/top/speed/model`](https://nimstats.maurodruwel.be/top/speed/model) | **50%** Avg Response Time + **50%** Throughput (TPS) |
-| **🧠 Model Intelligence** | [`/top/intelligence`](https://nimstats.maurodruwel.be/top/intelligence) | [`/top/intelligence/model`](https://nimstats.maurodruwel.be/top/intelligence/model) | **70%** Artificial Analysis Score + **30%** Uptime |
-
-### JSON Response Schema
-
-```json
-{
-  "best_model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-  "provider": "nvidia",
-  "score": 71,
-  "intelligence": 14.9,
-  "uptime": 90.6,
-  "avg_response_time_ms": 4736.7,
-  "best_response_time_ms": 432.0,
-  "avg_time_to_first_token_ms": 312.5,
-  "avg_throughput_tps": 163.3,
-  "total_runs": 720,
-  "success_count": 652,
-  "wins": 364,
-  "last_seen": "2026-07-07T10:00:08Z",
-  "generated_at": "2026-07-07T10:08:49Z"
-}
-```
-
----
-
-## 🤖 Benchmarked Models
-
-<details>
-<summary><b>22 models across 11 providers — click to expand</b></summary>
-
-<br/>
-
-| Provider | Model | Highlight |
-|----------|-------|-----------|
-| **DeepSeek** | `deepseek-ai/deepseek-v4-flash` | Fast MoE, optimized for speed |
-| **DeepSeek** | `deepseek-ai/deepseek-v4-pro` | Professional-grade reasoning |
-| **Z-AI** | `z-ai/glm-5.2` | Superior code understanding |
-| **MiniMax** | `minimaxai/minimax-m2.7` | Efficient inference model |
-| **MiniMax** | `minimaxai/minimax-m3` | Latest MiniMax generation |
-| **NVIDIA** | `nvidia/nemotron-3-super-120b-a12b` | NVIDIA's 120B flagship |
-| **NVIDIA** | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | Compact omni reasoning model |
-| **NVIDIA** | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Nemotron Super 49B v1.5 |
-| **Moonshot** | `moonshotai/kimi-k2.6` | Context-optimized model |
-| **OpenAI** | `openai/gpt-oss-120b` | Open-source 120B |
-| **Google** | `google/gemma-4-31b-it` | Lightweight edge inference |
-| **Qwen** | `qwen/qwen3.5-397b-a17b` | Flagship Qwen (397B) |
-| **Qwen** | `qwen/qwen3.5-122b-a10b` | Mid-range Qwen 3.5 MoE |
-| **Qwen** | `qwen/qwen3-next-80b-a3b-instruct` | Next-gen Qwen (80B MoE) |
-| **Mistral** | `mistralai/mistral-large-3-675b-instruct-2512` | Largest Mistral (675B) |
-| **Mistral** | `mistralai/mistral-medium-3.5-128b` | Efficient medium-scale Mistral |
-| **Mistral** | `mistralai/mistral-small-4-119b-2603` | Mistral Small 4 (119B) |
-| **Meta** | `meta/llama-3.3-70b-instruct` | Llama 3.3 70B |
-| **Meta** | `meta/llama-4-maverick-17b-128e-instruct` | Llama 4 Maverick (128 experts) |
-| **Meta** | `meta/llama-3.2-90b-vision-instruct` | Multimodal 90B vision model |
-| **StepFun** | `stepfun-ai/step-3.5-flash` | Ultra-fast flash model |
-| **StepFun** | `stepfun-ai/step-3.7-flash` | Latest high-performance flash |
-
-</details>
-
----
-
-## 🏗️ How It Works
-
-````
-┌──────────────────── GitHub Actions (every hour) ──────────────────────┐
-│                                                                       │
-│   ┌─────────────────────┐        ┌─────────────────────┐              │
-│   │  Job 1 — Group A    │        │  Job 2 — Group B    │ (parallel)   │
-│   │  N/2 NIM models     │        │  N/2 NIM models     │              │
-│   └──────────┬──────────┘        └──────────┬──────────┘              │
-│              └──────────────┬───────────────┘                         │
-│                    ┌────────▼────────┐                                │
-│                    │  Merge + commit │ → history.db committed to repo │
-│                    └─────────────────┘                                │
-└───────────────────────────────────────────────────────────────────────┘
-                              │
-                   ┌──────────▼───────────┐
-                   │  Cloudflare Pages    │ → auto-deploys on push
-                   │  (static dashboard)  │   index.html + history.db
-                   └──────────────────────┘
-````
-
-**Parallel jobs = ~50% faster benchmarks** ⚡
-
----
-
-## 🛠️ Customization
-
-<details>
-<summary><b>Change the benchmark prompt</b></summary>
-
-Edit `PROMPT` in `scripts/test_models.py`:
-```python
-PROMPT = "Your custom prompt here"
-```
-</details>
-
-<details>
-<summary><b>Model catalog (auto from NVIDIA /v1/models)</b></summary>
-
-Every benchmark run pulls `GET {API_BASE}/models`, caches to `scripts/models_cache.json`, and filters to **chat-compatible** models only (drops embeddings, rerank, image-gen, reward, OCR/parse, safety-only, etc.). If the pull fails, the last local cache is used.
+## 本地运行
 
 ```bash
-# Refresh cache + show chat-eligible models
-python scripts/manage_models.py refresh
-python scripts/manage_models.py list
-
-# Permanently skip a model
-python scripts/manage_models.py deny some-org/broken-model
-
-# Force-include a model the filter would drop
-python scripts/manage_models.py allow some-org/special-model
-
-# Drop history.db rows for models not in the current chat set
-python scripts/manage_models.py purge
+export NIM_API_KEY='your-key'
+python3 -u scripts/rolling_bench.py
+python3 scripts/generate_best.py
+python3 scripts/build_pages.py --output _site
+python3 -m http.server 8000 --directory _site
 ```
 
-Env knobs:
-- `NIM_API_KEY` (required) — or put it in `.env`
-- `MODEL_LIMIT=20` — only test first N chat models (local smoke)
-- `STATIC_MODELS=a/b,c/d` — ignore catalog, use this fixed list
-- `SKIP_HISTORY=1` — do not write history.db
-- `models_denylist.txt` / `models_allowlist.txt` under `scripts/`
-</details>
+浏览器打开 <http://localhost:8000/>。本地简单 HTTP 服务器不模拟 GitHub Pages 的无扩展名目录索引，调试 API 时可直接访问 `.json` / `.txt` 文件。
 
-
-
-<details>
-<summary><b>Live availability probe (catalog ≠ callable)</b></summary>
-
-`/v1/models` is only a catalog. Many entries return `404 Function Not found for account` (retired / not entitled). NIMStats now:
-
-1. Pull + filter **chat candidates**
-2. **Probe** each with a tiny non-stream `/chat/completions`
-3. Full stream benchmark **only `AVAILABLE`** models (default)
-
-Statuses: `AVAILABLE` | `GONE` | `UNAUTHORIZED` | `RATE_LIMITED` | `TIMEOUT` | `ERROR`
+常用模型目录命令：
 
 ```bash
-# Probe only (fast fleet map)
-PROBE_ONLY=1 python scripts/test_models.py
-# or
-python scripts/manage_models.py probe
-
-# Skip probe (old behavior — not recommended)
-SKIP_PROBE=1 python scripts/test_models.py
-
-# Bench unavailable too
-BENCH_ONLY_AVAILABLE=0 python scripts/test_models.py
+python3 scripts/manage_models.py refresh
+python3 scripts/manage_models.py list
+python3 scripts/manage_models.py deny some-org/model
+python3 scripts/manage_models.py allow some-org/model
 ```
 
-Outputs: `scripts/availability_cache.json`, fleet snapshot in `results.json` summary.
-</details>
+## 数据说明
 
-<details>
-<summary><b>Change the schedule</b></summary>
+`history.db` 是面板的 SQLite 数据源，浏览器通过 sql.js 在本地查询。`scripts/models_cache.json` 保存所有密钥目录的并集；`scripts/fleet_snapshot.json` 是当前舰队状态快照。临时的 `scripts/results.json` 不提交。
 
-Edit `.github/workflows/benchmark.yml`:
-```yaml
-- cron: '0 */6 * * *'  # Every 6 hours instead of every hour
-```
-</details>
+性能数据会受到模型冷启动、共享服务负载、网络、模型分词器和输出服从度影响，只适合趋势观察，不应视为严格的实验室评测或服务等级承诺。
 
-<details>
-<summary><b>Run locally</b></summary>
+## 使用声明与致谢
 
-```bash
-# Serve the dashboard
-python3 -m http.server 8000
-# Open http://localhost:8000
+本仓库仅供个人学习、教育和非商业实验。使用 NVIDIA API 时请遵守 NVIDIA 的服务条款、密钥管理要求和限速规则；请勿将本项目用于滥用接口、绕过平台限制或对外提供未经授权的服务。
 
-# Run benchmarks manually (requires NIM_API_KEY env var)
-export NIM_API_KEY=your_key_here
-python3 scripts/test_models.py
-```
-</details>
-
----
-
-## 📦 Data Storage
-
-`history.db` is a SQLite database persisted in the repo — the single source of truth. The browser loads it via [sql.js](https://sql.js.org/) (WebAssembly) and queries it entirely client-side. `scripts/results.json` is a temporary per-job artifact that is never committed.
-
-**Schema Architecture:**
-
-```sql
-CREATE TABLE prompts (
-  id INTEGER PRIMARY KEY,
-  text TEXT UNIQUE
-);
-
-CREATE TABLE models (
-  id INTEGER PRIMARY KEY,
-  name TEXT UNIQUE,
-  intelligence_score REAL DEFAULT NULL
-);
-
-CREATE TABLE errors (
-  id INTEGER PRIMARY KEY,
-  text TEXT UNIQUE
-);
-
-CREATE TABLE runs (
-  id INTEGER PRIMARY KEY,
-  timestamp TEXT NOT NULL,
-  prompt_id INTEGER REFERENCES prompts(id),
-  fastest_model_id INTEGER REFERENCES models(id),
-  fastest_time INTEGER
-);
-
-CREATE TABLE model_results (
-  run_id INTEGER REFERENCES runs(id),
-  model_id INTEGER REFERENCES models(id),
-  success INTEGER NOT NULL,
-  error_id INTEGER REFERENCES errors(id),
-  response_time INTEGER,
-  tokens_generated INTEGER,
-  total_tokens INTEGER,
-  time_to_first_token INTEGER,
-  PRIMARY KEY (run_id, model_id)
-);
-```
-
-**Benchmark parameters:** `temperature: 0.7` · `top_p: 0.9` · `max_tokens: 500` · OpenAI-compatible API
-
----
-
-## 🤝 Contributing
-
-Contributions are what make the open-source community amazing. Any contribution you make is **greatly appreciated**!
-
-1. **Fork** the repository
-2. Create your feature branch: `git checkout -b feat/amazing-feature`
-3. Commit your changes: `git commit -m 'feat: add amazing feature'`
-4. Push to the branch: `git push origin feat/amazing-feature`
-5. Open a **Pull Request**
-
-**Ideas for contributions:**
-- 🆕 Add new NIM models to the benchmark list
-- 📊 New chart types or dashboard widgets
-- 🌐 Internationalization / translations
-- 🐛 Bug fixes and performance improvements
-- 📖 Improve documentation
-
-Please read through open [Issues](https://github.com/MauroDruwel/NIMStats/issues) before starting — someone might already be working on it!
-
----
-
-## 🔗 Resources
-
-- [NVIDIA NIM API Documentation](https://docs.api.nvidia.com/nim/)
-- [NVIDIA Model Catalog](https://build.nvidia.com/models)
-- [GitHub Actions Docs](https://docs.github.com/en/actions)
-- [sql.js — SQLite in the browser](https://sql.js.org/)
-
----
-
-## 📄 License
-
-Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
-
----
-
-<div align="center">
-
-Made with ❤️ for the ML community · [⭐ Star this repo](https://github.com/MauroDruwel/NIMStats) if you find it useful!
-
-[![footer](https://capsule-render.vercel.app/api?type=waving&color=76b900&height=100&section=footer)](https://nimstats.maurodruwel.be/)
-
-</div>
+特别感谢 [MauroDruwel/NIMStats](https://github.com/MauroDruwel/NIMStats) 的原始工作，以及原仓库所有贡献者。本个人版本中的修改不代表原作者立场。

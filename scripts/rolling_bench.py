@@ -3,9 +3,10 @@
 
 Strategy:
   catalog → chat filter → stable sorted fleet → take next BATCH_SIZE models
-  (cursor wraps). For each model: Health/TTFT request (also sets availability
-  status) then Throughput request if AVAILABLE. Client rate limiter ≤40 rpm.
-  Writes history.db + advances cursor. Pages regenerates after each batch.
+  (0 means the whole fleet). Each model gets one deterministic streaming call
+  that measures availability, TTFT, end-to-end latency, and decode throughput.
+  Requests run concurrently across a per-key 40 RPM pool. Writes history.db and
+  advances the cursor; the workflow deploys Pages after each completed run.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -39,28 +40,37 @@ from db_utils import (  # noqa: E402
     write_rolling_batch,
     STALE_AFTER_MINUTES,
 )
+from api_key_pool import ApiKeyPool, load_api_keys  # noqa: E402
 from model_catalog import get_benchmark_models  # noqa: E402
-from rate_limiter import RateLimiter  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent
 FLEET_OUT = SCRIPT_DIR / "fleet_snapshot.json"
 RESULTS_OUT = SCRIPT_DIR / "results.json"
 
-# ── prompts (only these two standard tests) ──────────────────────────────────
-HEALTH_PROMPT = os.getenv("HEALTH_PROMPT", "Reply with exactly: OK")
-# Fixed, deterministic, relatively stable output length for decode TPS
-THROUGHPUT_PROMPT = os.getenv(
-    "THROUGHPUT_PROMPT",
-    "Write the integers from 1 to 40 inclusive, one number per line. "
-    "Output only the numbers, nothing else.",
+# A single fixed payload makes results more comparable than asking models to
+# count or write code. It is long enough for useful decode throughput while
+# requiring no knowledge, reasoning, localization, or safety judgement.
+BENCHMARK_PAYLOAD = (
+    "amber apple autumn baker beach birch blue breeze brook candle cedar circle "
+    "cloud coral dawn delta dune earth ember field flame forest frost garden "
+    "glass gold grain green harbor hazel hill honey iris ivory jade lake leaf "
+    "lemon light lilac linen maple meadow mist moon moss north oak ocean olive "
+    "orange pearl pine plum quartz rain river rose silver sky snow south spring "
+    "stone summer tide trail violet water west willow wind winter"
+)
+BENCHMARK_PROMPT = os.getenv(
+    "BENCHMARK_PROMPT",
+    "This is a deterministic transport benchmark, not a question. Copy the "
+    "payload between <payload> and </payload> exactly once. Return only the "
+    "payload: no tags, explanation, Markdown, quotation marks, or leading or "
+    f"trailing text.\n<payload>\n{BENCHMARK_PAYLOAD}\n</payload>",
 )
 
 API_BASE = os.getenv("API_BASE", "https://integrate.api.nvidia.com/v1").rstrip("/")
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "9"))  # 8–10
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "0"))  # 0 = whole fleet
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "90"))
-HEALTH_MAX_TOKENS = int(os.getenv("HEALTH_MAX_TOKENS", "8"))
-THROUGHPUT_MAX_TOKENS = int(os.getenv("THROUGHPUT_MAX_TOKENS", "120"))
+BENCHMARK_MAX_TOKENS = int(os.getenv("BENCHMARK_MAX_TOKENS", "192"))
 
 
 def _load_dotenv() -> None:
@@ -78,7 +88,7 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
-API_KEY = os.getenv("NIM_API_KEY") or os.getenv("NVIDIA_API_KEY") or ""
+API_KEYS = load_api_keys()
 
 
 def classify_http(status_code: int, message: str) -> str:
@@ -150,10 +160,11 @@ def chat_completion(
     prompt: str,
     max_tokens: int,
     stream: bool,
-    limiter: RateLimiter,
+    key_pool: ApiKeyPool,
+    preferred_key_indexes: list[int] | None = None,
 ) -> dict[str, Any]:
-    """One API call with rate limiting. Stream used for TTFT."""
-    limiter.wait()
+    """One API call using a rate-limited key from the shared pool."""
+    api_key = key_pool.acquire(preferred_key_indexes)
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -167,7 +178,7 @@ def chat_completion(
         data=body,
         method="POST",
         headers={
-            "Authorization": f"Bearer {API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json" if not stream else "text/event-stream",
             "User-Agent": "NIMStats-rolling/2.0",
@@ -301,7 +312,7 @@ def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str
     n = len(fleet)
     if n == 0:
         return [], 0, 0, 0
-    batch_size = max(1, min(batch_size, n))
+    batch_size = n if batch_size <= 0 else min(batch_size, n)
     start = cursor % n
     batch: list[str] = []
     for i in range(batch_size):
@@ -310,105 +321,75 @@ def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str
     return batch, start, (start + batch_size), new_cursor
 
 
-def run_model(model: str, limiter: RateLimiter) -> list[dict[str, Any]]:
-    """Health (availability + TTFT) then Throughput if AVAILABLE."""
-    rows: list[dict[str, Any]] = []
-
-    print(f"  [health] {model}", flush=True)
-    health = chat_completion(
+def run_model(
+    model: str,
+    key_pool: ApiKeyPool,
+    preferred_key_indexes: list[int] | None = None,
+) -> dict[str, Any]:
+    """Run the unified availability + latency + throughput benchmark."""
+    print(f"  [benchmark] {model}", flush=True)
+    result = chat_completion(
         model=model,
-        prompt=HEALTH_PROMPT,
-        max_tokens=HEALTH_MAX_TOKENS,
+        prompt=BENCHMARK_PROMPT,
+        max_tokens=BENCHMARK_MAX_TOKENS,
         stream=True,
-        limiter=limiter,
+        key_pool=key_pool,
+        preferred_key_indexes=preferred_key_indexes,
     )
-    health_row = {
-        "model": model,
-        "testKind": "health",
-        "success": health["success"],
-        "status": health["status"],
-        "httpStatus": health.get("httpStatus"),
-        "error": health.get("error"),
-        "responseTime": health.get("responseTime"),
-        "timeToFirstToken": health.get("timeToFirstToken"),
-        "tokensGenerated": health.get("tokensGenerated"),
-        "totalTokens": health.get("totalTokens"),
-        "decodeTps": decode_tps(
-            health.get("tokensGenerated"),
-            health.get("responseTime"),
-            health.get("timeToFirstToken"),
-            content=health.get("response"),
-        ),
-        "response": health.get("response"),
-    }
-    rows.append(health_row)
-    mark = "OK" if health["success"] else health["status"]
-    print(
-        f"    → {mark} e2e={health.get('responseTime')}ms ttft={health.get('timeToFirstToken')} "
-        f"{health.get('error') or ''}",
-        flush=True,
-    )
-
-    if health["status"] != STATUS_AVAILABLE or not health["success"]:
-        return rows
-
-    print(f"  [throughput] {model}", flush=True)
-    # Non-stream so usage.completion_tokens is reliable for decode TPS.
-    thr = chat_completion(
-        model=model,
-        prompt=THROUGHPUT_PROMPT,
-        max_tokens=THROUGHPUT_MAX_TOKENS,
-        stream=False,
-        limiter=limiter,
-    )
-    thr_row = {
+    response = result.get("response") or ""
+    row = {
         "model": model,
         "testKind": "throughput",
-        "success": thr["success"],
-        "status": thr["status"] if thr["success"] else thr["status"],
-        "httpStatus": thr.get("httpStatus"),
-        "error": thr.get("error"),
-        "responseTime": thr.get("responseTime"),
-        "timeToFirstToken": thr.get("timeToFirstToken"),
-        "tokensGenerated": thr.get("tokensGenerated"),
-        "totalTokens": thr.get("totalTokens"),
+        "success": result["success"],
+        "status": result["status"],
+        "httpStatus": result.get("httpStatus"),
+        "error": result.get("error"),
+        "responseTime": result.get("responseTime"),
+        "timeToFirstToken": result.get("timeToFirstToken"),
+        "tokensGenerated": result.get("tokensGenerated"),
+        "totalTokens": result.get("totalTokens"),
         "decodeTps": decode_tps(
-            thr.get("tokensGenerated"),
-            thr.get("responseTime"),
-            thr.get("timeToFirstToken"),
-            content=thr.get("response"),
+            result.get("tokensGenerated"),
+            result.get("responseTime"),
+            result.get("timeToFirstToken"),
+            content=response,
         ),
-        "response": thr.get("response"),
+        "response": response or None,
+        "responseMatchesPayload": response.strip() == BENCHMARK_PAYLOAD,
     }
-    rows.append(thr_row)
-    mark = "OK" if thr["success"] else thr["status"]
+    mark = "OK" if result["success"] else result["status"]
+    compliance = "exact" if row["responseMatchesPayload"] else "non-exact"
     print(
-        f"    → {mark} e2e={thr.get('responseTime')}ms ttft={thr.get('timeToFirstToken')} "
-        f"tok={thr.get('tokensGenerated')} tps={thr_row.get('decodeTps')} "
-        f"{thr.get('error') or ''}",
+        f"    → {mark} e2e={result.get('responseTime')}ms "
+        f"ttft={result.get('timeToFirstToken')} tok={result.get('tokensGenerated')} "
+        f"tps={row.get('decodeTps')} output={compliance} {result.get('error') or ''}",
         flush=True,
     )
-    return rows
+    return row
 
 
 def main() -> int:
-    if not API_KEY:
-        print("Error: NIM_API_KEY / NVIDIA_API_KEY not set", file=sys.stderr)
+    if not API_KEYS:
+        print("Error: NIM_API_KEYS / NIM_API_KEY / NVIDIA_API_KEY not set", file=sys.stderr)
         return 1
 
     import sqlite3
 
-    # 1) Fleet from catalog (chat-filtered)
-    fleet, catalog_meta = get_benchmark_models(api_key=API_KEY, verbose=True)
+    # 1) Full retained fleet from the union of every key-specific catalog.
+    key_pool = ApiKeyPool(API_KEYS)
+    catalog_keys = [key_pool.acquire() for _ in range(key_pool.key_count)]
+    fleet, catalog_meta = get_benchmark_models(api_keys=catalog_keys, verbose=True)
+    model_key_indexes = catalog_meta.pop("model_key_indexes", {})
     fleet = sorted(set(fleet))
     if not fleet:
-        print("No chat models in catalog", file=sys.stderr)
+        print("No models in catalog", file=sys.stderr)
         return 2
 
     conn = sqlite3.connect(str(HISTORY_DB))
     init_schema(conn)
     ensure_models(conn, fleet)
-    # Drop models no longer in chat fleet? keep history; optional mark — skip delete
+    # Never delete models that disappeared from the latest catalog; retained
+    # IDs are still probed so retired models receive an explicit status.
     cursor = int(get_state(conn, "cursor", "0") or "0")
     set_state(conn, "fleet_size", str(len(fleet)))
     set_state(conn, "fleet_json", json.dumps(fleet))
@@ -421,19 +402,42 @@ def main() -> int:
         flush=True,
     )
 
-    limiter = RateLimiter()
     all_rows: list[dict[str, Any]] = []
-    for model in batch:
-        print(f"Testing: {model}", flush=True)
-        all_rows.extend(run_model(model, limiter))
+    default_workers = min(64, max(8, key_pool.key_count * 4))
+    max_workers = max(1, int(os.getenv("NIM_MAX_IN_FLIGHT", str(default_workers))))
+    print(
+        f"Request pool: keys={key_pool.key_count} per_key_rpm="
+        f"{os.getenv('NIM_MAX_REQUESTS_PER_MINUTE', '40')} workers={max_workers}",
+        flush=True,
+    )
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
+        futures = {
+            executor.submit(run_model, model, key_pool, model_key_indexes.get(model)): model
+            for model in batch
+        }
+        for future in as_completed(futures):
+            model = futures[future]
+            try:
+                all_rows.append(future.result())
+            except Exception as exc:  # defensive: preserve the rest of the fleet run
+                print(f"  [internal-error] {model}: {type(exc).__name__}: {exc}", flush=True)
+                all_rows.append(
+                    {
+                        "model": model,
+                        "testKind": "throughput",
+                        "success": False,
+                        "status": STATUS_ERROR,
+                        "error": f"Internal worker error: {type(exc).__name__}: {exc}",
+                    }
+                )
+
+    # Stable persistence and JSON output regardless of completion order.
+    all_rows.sort(key=lambda row: row["model"])
 
     timestamp = utc_now()
-    # Combined prompt label for run row
-    prompt_label = f"HEALTH: {HEALTH_PROMPT} | THROUGHPUT: {THROUGHPUT_PROMPT}"
-
     run_id = write_rolling_batch(
         timestamp=timestamp,
-        prompt=prompt_label,
+        prompt=BENCHMARK_PROMPT,
         models=all_rows,
         batch_meta={
             "batch_size": len(batch),
@@ -453,10 +457,10 @@ def main() -> int:
     conn.close()
 
     # Summaries
-    health_rows = [r for r in all_rows if r.get("testKind") == "health"]
-    thr_ok = [r for r in all_rows if r.get("testKind") == "throughput" and r.get("success")]
+    successful = [r for r in all_rows if r.get("success")]
+    exact = [r for r in successful if r.get("responseMatchesPayload")]
     by_status: dict[str, int] = {}
-    for r in health_rows:
+    for r in all_rows:
         st = r.get("status") or STATUS_ERROR
         by_status[st] = by_status.get(st, 0) + 1
 
@@ -467,10 +471,14 @@ def main() -> int:
         "cursorStart": c_start,
         "cursorEnd": new_cursor,
         "fleetSize": len(fleet),
-        "healthByStatus": by_status,
-        "throughputSuccess": len(thr_ok),
+        "byStatus": by_status,
+        "successCount": len(successful),
+        "exactPayloadCount": len(exact),
         "catalog": catalog_meta,
         "rateLimitRpm": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "40")),
+        "apiKeyCount": key_pool.key_count,
+        "requestCount": key_pool.request_count,
+        "maxInFlight": max_workers,
     }
     RESULTS_OUT.write_text(
         json.dumps({"summary": summary, "models": all_rows}, indent=2),

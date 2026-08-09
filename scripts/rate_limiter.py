@@ -1,16 +1,29 @@
-"""Client-side rate limiter for NVIDIA API (default 40 requests/minute)."""
+"""Thread-safe client-side limiter for NVIDIA API requests."""
 
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 
 class RateLimiter:
-    """Sliding-window limiter: at most `max_per_minute` acquires per 60s."""
+    """Sliding-window limiter: at most ``max_per_minute`` starts per 60s.
 
-    def __init__(self, max_per_minute: int | None = None) -> None:
+    Requests are also evenly spaced.  Even spacing avoids a burst at the start
+    of a workflow and lets many worker threads keep slow requests in flight
+    without exceeding NVIDIA's per-key 40 RPM limit.
+    """
+
+    def __init__(
+        self,
+        max_per_minute: int | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.max_per_minute = int(
             max_per_minute
             if max_per_minute is not None
@@ -20,29 +33,41 @@ class RateLimiter:
             self.max_per_minute = 1
         self._min_interval = 60.0 / self.max_per_minute
         self._times: deque[float] = deque()
-        self._last_acquire = 0.0
+        self._last_acquire: float | None = None
+        self._lock = threading.Lock()
+        self._clock = clock
+        self._sleep = sleep
 
     def wait(self) -> float:
         """Block until a request slot is available. Returns seconds waited."""
         waited = 0.0
         while True:
-            now = time.monotonic()
-            # drop timestamps outside the window
-            while self._times and now - self._times[0] >= 60.0:
-                self._times.popleft()
+            with self._lock:
+                now = self._clock()
+                while self._times and now - self._times[0] >= 60.0:
+                    self._times.popleft()
 
-            since_last = now - self._last_acquire if self._last_acquire else self._min_interval
-            need_spacing = max(0.0, self._min_interval - since_last)
+                since_last = (
+                    now - self._last_acquire
+                    if self._last_acquire is not None
+                    else self._min_interval
+                )
+                need_spacing = max(0.0, self._min_interval - since_last)
 
-            if len(self._times) < self.max_per_minute and need_spacing <= 0:
-                self._times.append(now)
-                self._last_acquire = now
-                return waited
+                if len(self._times) < self.max_per_minute and need_spacing <= 0:
+                    self._times.append(now)
+                    self._last_acquire = now
+                    return waited
 
-            # sleep until either spacing elapsed or oldest timestamp exits window
-            sleep_for = need_spacing
-            if len(self._times) >= self.max_per_minute:
-                sleep_for = max(sleep_for, 60.0 - (now - self._times[0]) + 0.02)
-            sleep_for = max(sleep_for, 0.02)
-            time.sleep(sleep_for)
+                sleep_for = need_spacing
+                if len(self._times) >= self.max_per_minute:
+                    sleep_for = max(
+                        sleep_for,
+                        60.0 - (now - self._times[0]) + 0.001,
+                    )
+
+            # Never sleep while holding the lock: another worker may have an
+            # earlier reservation on a different wake-up cycle.
+            sleep_for = max(sleep_for, 0.001)
+            self._sleep(sleep_for)
             waited += sleep_for

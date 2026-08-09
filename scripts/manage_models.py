@@ -55,7 +55,7 @@ def _db_connect() -> sqlite3.Connection:
 
 
 def cmd_refresh() -> int:
-    models, source = refresh_models(verbose=True)
+    models, source, _fetch_meta = refresh_models(verbose=True)
     chat, meta = get_benchmark_models(verbose=True)
     print(f"source={source} catalog={len(models)} chat={len(chat)}")
     print(f"categories={meta['by_category']}")

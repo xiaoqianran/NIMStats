@@ -204,10 +204,8 @@ def write_rolling_batch(
 ) -> int:
     """
     Persist one rolling batch run.
-    `models` items may include multiple test_kind rows (health/throughput);
-    we store one model_results row per (model, test_kind). For dashboard
-    historical series we also keep a preferred 'primary' row per model in the
-    run (health if present else first).
+    ``models`` may contain legacy health/throughput pairs or one unified
+    throughput row. The preferred row is persisted for dashboard history.
     """
     batch_meta = batch_meta or {}
     conn = sqlite3.connect(str(db_path))
@@ -248,7 +246,8 @@ def write_rolling_batch(
         )
         run_id = cur.lastrowid
 
-        # Group by model for current_status update (health defines availability)
+        # Group by model for current_status update. Legacy runs use health as
+        # availability truth; unified runs use their only throughput row.
         by_model: dict[str, list[dict[str, Any]]] = {}
         for m in models:
             by_model.setdefault(m["model"], []).append(m)
@@ -258,8 +257,7 @@ def write_rolling_batch(
             health = next((r for r in rows if r.get("testKind") == "health"), rows[0])
             thr = next((r for r in rows if r.get("testKind") == "throughput"), None)
 
-            # One historical row per model per run (SQLite PK compat + simple charts):
-            # availability/status from health; latency/tps prefer successful throughput.
+            # One historical row per model per run (SQLite PK compat + simple charts).
             primary = dict(health)
             if thr and thr.get("success"):
                 primary = {
