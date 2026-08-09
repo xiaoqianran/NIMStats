@@ -16,11 +16,11 @@ OPTIONAL_ROOT_FILES = ("_headers", "_redirects", "robots.txt")
 # GitHub Pages does not process Netlify/Cloudflare `_redirects`. Directory
 # index files provide equivalent extensionless public API routes on Pages.
 API_ROUTES = {
-    "top/model/index.txt": "top/model.txt",
+    "top/model": "top/model.txt",
     "top/speed/index.json": "top/speed.json",
-    "top/speed/model/index.txt": "top/speed.txt",
+    "top/speed/model": "top/speed.txt",
     "top/intelligence/index.json": "top/intelligence.json",
-    "top/intelligence/model/index.txt": "top/intelligence.txt",
+    "top/intelligence/model": "top/intelligence.txt",
 }
 
 

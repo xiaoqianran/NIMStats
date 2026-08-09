@@ -100,7 +100,7 @@ class MonitorTests(unittest.TestCase):
             output = Path(tmp) / "site"
             files = build_site(ROOT, output)
             self.assertIn("top/speed/index.json", files)
-            self.assertIn("top/speed/model/index.txt", files)
+            self.assertIn("top/speed/model", files)
             self.assertTrue((output / ".nojekyll").exists())
             self.assertFalse((output / "scripts" / "rolling_bench.py").exists())
             self.assertFalse((output / ".github").exists())

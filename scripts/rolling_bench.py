@@ -387,7 +387,7 @@ def run_model(
     mark = "OK" if result["success"] else result["status"]
     compliance = "exact" if row["responseMatchesPayload"] else "non-exact"
     print(
-        f"    → {mark} e2e={result.get('responseTime')}ms "
+        f"    → {model} {mark} e2e={result.get('responseTime')}ms "
         f"ttft={result.get('timeToFirstToken')} tok={result.get('tokensGenerated')} "
         f"tps={row.get('decodeTps')} output={compliance} "
         f"keys_tried={len(tried_indexes)} {result.get('error') or ''}",
