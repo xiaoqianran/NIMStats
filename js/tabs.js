@@ -1,9 +1,9 @@
 // ─── Overview Tab ─────────────────────────────────────────────────────────────
 function renderOverview() {
-  const { runs, modelNames, modelStats } = state;
+  const { runs, modelNames, modelStats, rawRuns } = state;
 
-  // KPIs
-  const totalRuns = runs.length;
+  // KPIs — total batches always from full history (limit filter only affects charts/tables)
+  const totalRuns = (rawRuns && rawRuns.length) ? rawRuns.length : runs.length;
   const allUptimes = modelNames.map(m => modelStats[m].uptime);
   const avgSuccessRate = avg(allUptimes) * 100;
 
@@ -17,7 +17,7 @@ function renderOverview() {
   const mostReliable = [...modelNames].sort((a, b) => modelStats[b].uptime - modelStats[a].uptime)[0];
 
   const kpiData = [
-    { icon: '🔁', label: 'Total Runs', val: totalRuns, sub: `${runs[0]?.timestamp?.slice(0,10)} → ${runs[runs.length-1]?.timestamp?.slice(0,10)}`, decimals: 0 },
+    { icon: '🔁', label: 'Total Batches', val: totalRuns, sub: (() => { const rr = rawRuns?.length ? rawRuns : runs; return `${rr[0]?.timestamp?.slice(0,10) || ''} → ${rr[rr.length-1]?.timestamp?.slice(0,10) || ''} · each batch ≈9 models`; })(), decimals: 0 },
     { icon: '✅', label: 'Avg Success Rate', val: avgSuccessRate, suffix: '%', decimals: 1, sub: 'across all runs & models' },
     { icon: '⚡', label: 'Avg Best Response', val: bestTimeVal / 1000, suffix: 's', decimals: 2, sub: bestTimeModel ? shortModel(bestTimeModel) : '' },
     { icon: '🚀', label: 'Avg Best Throughput', val: bestTpsVal, suffix: ' t/s', decimals: 1, sub: bestTpsModel ? shortModel(bestTpsModel) : '' },
@@ -40,7 +40,7 @@ function renderOverview() {
   });
 
   document.getElementById('overview-sub').textContent =
-    `${totalRuns} benchmark runs · ${modelNames.length} models · ${runs[0]?.timestamp?.slice(0,10)} to ${runs[runs.length-1]?.timestamp?.slice(0,10)}`;
+    `${totalRuns} rolling batches · ${modelNames.length} models · window filter: ${state.limit || 'all'}`;
 
   // Charts
   const labels = runs.map(r => fmtTimestampShort(r.timestamp));

@@ -242,7 +242,8 @@ async function init() {
       locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
     });
 
-    const res = await fetch('history.db');
+    // Bust CDN/browser cache so rolling updates show up immediately
+    const res = await fetch(`history.db?t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buf = await res.arrayBuffer();
     state.db = new SQL.Database(new Uint8Array(buf));
