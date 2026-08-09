@@ -1,16 +1,16 @@
 {
-  "best_model": "z-ai/glm-5.2",
-  "provider": "z-ai",
-  "score": 58,
+  "best_model": "deepseek-ai/deepseek-v4-flash-0731",
+  "provider": "deepseek-ai",
+  "score": 66,
   "intelligence": null,
   "uptime": 100.0,
-  "avg_response_time_ms": 25501.0,
-  "best_response_time_ms": 9741,
-  "avg_time_to_first_token_ms": 24067.5,
-  "avg_throughput_tps": 8.2,
+  "avg_response_time_ms": 2963.0,
+  "best_response_time_ms": 2872,
+  "avg_time_to_first_token_ms": 1649.0,
+  "avg_throughput_tps": 18.7,
   "total_runs": 2,
   "success_count": 2,
   "wins": 1,
-  "last_seen": "2026-08-09T14:03:07Z",
-  "generated_at": "2026-08-09T14:03:07Z"
+  "last_seen": "2026-08-09T14:48:08Z",
+  "generated_at": "2026-08-09T14:48:08Z"
 }
