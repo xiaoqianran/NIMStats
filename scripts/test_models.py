@@ -174,7 +174,7 @@ def call_model(model: str, prompt: str) -> dict[str, Any]:
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "top_p": 0.9,
-        "max_tokens": 500,
+        "max_tokens": int(os.getenv("BENCH_MAX_TOKENS", "150")),
         "stream": True,
     }
     body = json.dumps(payload).encode("utf-8")

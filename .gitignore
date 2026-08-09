@@ -39,3 +39,6 @@ __pycache__/
 scripts/availability_cache.json
 scripts/models_cache_raw.json
 scripts/__pycache__/
+
+.codegraph/
+history.upstream-backup.db
