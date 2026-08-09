@@ -1,16 +1,16 @@
 {
-  "best_model": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+  "best_model": "nvidia/nemotron-3-super-120b-a12b",
   "provider": "nvidia",
   "score": 65,
   "intelligence": null,
   "uptime": 100.0,
-  "avg_response_time_ms": 2196.0,
-  "best_response_time_ms": 2034,
-  "avg_time_to_first_token_ms": 1122.0,
-  "avg_throughput_tps": 39.3,
+  "avg_response_time_ms": 13639.0,
+  "best_response_time_ms": 2940,
+  "avg_time_to_first_token_ms": 12253.5,
+  "avg_throughput_tps": 35.3,
   "total_runs": 2,
   "success_count": 2,
   "wins": 0,
-  "last_seen": "2026-08-09T11:41:51Z",
-  "generated_at": "2026-08-09T11:41:51Z"
+  "last_seen": "2026-08-09T12:03:04Z",
+  "generated_at": "2026-08-09T12:03:05Z"
 }
