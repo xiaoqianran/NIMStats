@@ -11,7 +11,7 @@
 
 ## 当前版本做了什么
 
-GitHub Actions 默认每 5 分钟运行一次：
+GitHub Actions 默认连续运行：一轮 Benchmark 成功完成并提交数据后立刻部署 Pages，Pages 部署成功后立即 dispatch 下一轮 Benchmark。它不再使用固定 cron，因此不会在上一轮尚未结束时按时钟重复排队；任一工作流失败时闭环会停下，可手动运行 `benchmark.yml` 恢复。
 
 1. 在“10 把 Key 权限完全相同”的前提下，用一把轮询 Key 请求 NVIDIA `GET /v1/models`，并保留过去发现、后来下线的模型。
 2. 对目录中的每个模型固定调用 `/v1/chat/completions` **4 次**，不再做跨 Key 权限确认，也不靠模型名称猜测它是否可用。
