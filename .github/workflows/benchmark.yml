@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Rolling batch (catalog → batch → health+throughput)
         env:
@@ -48,6 +50,7 @@ jobs:
 
       - name: Commit history + top
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add history.db top/ scripts/models_cache.json scripts/fleet_snapshot.json || true
@@ -55,11 +58,12 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "chore: rolling batch update $(date -u +%Y-%m-%dT%H:%MZ)"
-            git push
+            # Avoid non-fast-forward when schedule overlaps a manual push
+            git pull --rebase origin main
+            git push origin HEAD:main
           fi
 
-      # IMPORTANT: pushes made with GITHUB_TOKEN do NOT trigger other workflows.
-      # Deploy Pages here so the site always matches the latest history.db.
+      # Deploy in-job: GITHUB_TOKEN pushes do not chain other workflows.
       - name: Setup Pages
         uses: actions/configure-pages@v5
 

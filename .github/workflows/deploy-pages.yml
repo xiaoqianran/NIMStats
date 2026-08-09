@@ -1,10 +1,8 @@
 name: Deploy GitHub Pages
 
+# Frontend / manual deploys. Rolling batches deploy themselves in benchmark.yml
+# (GITHUB_TOKEN commits do not re-trigger this workflow).
 on:
-  # Backup path: when rolling finishes (covers cases where push-triggered deploy is skipped)
-  workflow_run:
-    workflows: ["Rolling NIM Benchmark"]
-    types: [completed]
   push:
     branches: [main]
     paths:
@@ -12,7 +10,6 @@ on:
       - "css/**"
       - "js/**"
       - "top/**"
-      - "history.db"
       - "favicon.svg"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
@@ -24,12 +21,10 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
-    # Skip failed rolling runs when triggered via workflow_run
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -37,9 +32,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # For workflow_run, checkout the commit that finished (may be newer main)
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -60,8 +52,6 @@ jobs:
           for f in google*.html robots.txt; do
             [ -f "$f" ] && cp "$f" _site/ || true
           done
-          echo "Site contents:"
-          find _site -type f | sort
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

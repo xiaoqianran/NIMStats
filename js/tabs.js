@@ -16,9 +16,14 @@ function renderOverview() {
   }
   const mostReliable = [...modelNames].sort((a, b) => modelStats[b].uptime - modelStats[a].uptime)[0];
 
+  const liveAvail = modelNames.filter(m => modelStats[m]?.displayStatus === 'AVAILABLE').length;
+  const liveGone = modelNames.filter(m => modelStats[m]?.displayStatus === 'GONE').length;
+  const liveStale = modelNames.filter(m => modelStats[m]?.displayStatus === 'STALE').length;
+  const liveUnknown = modelNames.filter(m => !['AVAILABLE','GONE','STALE'].includes(modelStats[m]?.displayStatus)).length;
+
   const kpiData = [
     { icon: '🔁', label: 'Total Batches', val: totalRuns, sub: (() => { const rr = rawRuns?.length ? rawRuns : runs; return `${rr[0]?.timestamp?.slice(0,10) || ''} → ${rr[rr.length-1]?.timestamp?.slice(0,10) || ''} · each batch ≈9 models`; })(), decimals: 0 },
-    { icon: '✅', label: 'Avg Success Rate', val: avgSuccessRate, suffix: '%', decimals: 1, sub: 'across all runs & models' },
+    { icon: '✅', label: 'Live Available', val: liveAvail, decimals: 0, sub: `${liveGone} gone · ${liveStale} stale · ${liveUnknown} other` },
     { icon: '⚡', label: 'Avg Best Response', val: bestTimeVal / 1000, suffix: 's', decimals: 2, sub: bestTimeModel ? shortModel(bestTimeModel) : '' },
     { icon: '🚀', label: 'Avg Best Throughput', val: bestTpsVal, suffix: ' t/s', decimals: 1, sub: bestTpsModel ? shortModel(bestTpsModel) : '' },
     { icon: '🏅', label: 'Most Reliable', val: (modelStats[mostReliable]?.uptime || 0) * 100, suffix: '%', decimals: 1, sub: mostReliable ? shortModel(mostReliable) : '' },
@@ -75,7 +80,7 @@ function renderOverview() {
       }}},
       scales: {
         x: { display: false },
-        y: { min: 0, max: 20, grid: {}, ticks: { stepSize: 5 } }
+        y: { min: 0, suggestedMax: Math.max(10, ...successCounts, 1), grid: {}, ticks: { precision: 0 } }
       }
     }
   });

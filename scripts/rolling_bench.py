@@ -100,15 +100,25 @@ def classify_http(status_code: int, message: str) -> str:
     return STATUS_ERROR
 
 
-def decode_tps(completion_tokens: int | None, response_ms: int | None, ttft_ms: int | None) -> float | None:
+def decode_tps(
+    completion_tokens: int | None,
+    response_ms: int | None,
+    ttft_ms: int | None,
+    *,
+    content: str | None = None,
+) -> float | None:
     """Prefer completion_tokens / (response_time - TTFT) in seconds."""
-    if not completion_tokens or not response_ms or response_ms <= 0:
+    tokens = completion_tokens
+    if not tokens and content:
+        # rough fallback: ~1.3 tokens/word when provider omits usage
+        words = len(content.split())
+        tokens = max(1, int(words * 1.3)) if words else None
+    if not tokens or not response_ms or response_ms <= 0:
         return None
     gen_ms = response_ms - (ttft_ms or 0)
     if gen_ms <= 0:
-        # fallback: whole e2e window
         gen_ms = response_ms
-    return round(completion_tokens / (gen_ms / 1000.0), 4)
+    return round(tokens / (gen_ms / 1000.0), 4)
 
 
 def _parse_error_body(body: str, code: int) -> str:
@@ -246,7 +256,7 @@ def chat_completion(
                 "status": STATUS_AVAILABLE if ok else STATUS_ERROR,
                 "httpStatus": http_status,
                 "responseTime": latency,
-                "timeToFirstToken": latency if ok else None,  # non-stream approx
+                "timeToFirstToken": None,  # non-stream has no true TTFT
                 "tokensGenerated": ct or None,
                 "totalTokens": tt or None,
                 "response": str(content)[:500] if content else None,
@@ -327,6 +337,7 @@ def run_model(model: str, limiter: RateLimiter) -> list[dict[str, Any]]:
             health.get("tokensGenerated"),
             health.get("responseTime"),
             health.get("timeToFirstToken"),
+            content=health.get("response"),
         ),
         "response": health.get("response"),
     }
@@ -342,11 +353,12 @@ def run_model(model: str, limiter: RateLimiter) -> list[dict[str, Any]]:
         return rows
 
     print(f"  [throughput] {model}", flush=True)
+    # Non-stream so usage.completion_tokens is reliable for decode TPS.
     thr = chat_completion(
         model=model,
         prompt=THROUGHPUT_PROMPT,
         max_tokens=THROUGHPUT_MAX_TOKENS,
-        stream=True,
+        stream=False,
         limiter=limiter,
     )
     thr_row = {
@@ -364,6 +376,7 @@ def run_model(model: str, limiter: RateLimiter) -> list[dict[str, Any]]:
             thr.get("tokensGenerated"),
             thr.get("responseTime"),
             thr.get("timeToFirstToken"),
+            content=thr.get("response"),
         ),
         "response": thr.get("response"),
     }
