@@ -1,16 +1,16 @@
 {
-  "best_model": "nvidia/nemotron-mini-4b-instruct",
-  "provider": "nvidia",
-  "score": 77,
+  "best_model": "openai/gpt-oss-120b",
+  "provider": "openai",
+  "score": 98,
   "intelligence": null,
-  "uptime": 100.0,
-  "avg_response_time_ms": 1157.0,
-  "best_response_time_ms": 939,
-  "avg_time_to_first_token_ms": 585.5,
-  "avg_throughput_tps": 85.2,
+  "uptime": 50.0,
+  "avg_response_time_ms": 3644.0,
+  "best_response_time_ms": 3644,
+  "avg_time_to_first_token_ms": 3023.0,
+  "avg_throughput_tps": 193.2,
   "total_runs": 2,
-  "success_count": 2,
-  "wins": 1,
-  "last_seen": "2026-08-09T12:03:04Z",
-  "generated_at": "2026-08-09T12:03:05Z"
+  "success_count": 1,
+  "wins": 0,
+  "last_seen": "2026-08-09T13:13:39Z",
+  "generated_at": "2026-08-09T13:13:39Z"
 }
