@@ -424,7 +424,7 @@ function renderExplorer() {
     <div class="stat-card"><div class="stat-val">${s.avgTime ? (s.avgTime/1000).toFixed(2)+'s' : '—'}</div><div class="stat-label">Avg Response</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--warning)">${s.avgTtft ? s.avgTtft.toFixed(0)+'ms' : '—'}</div><div class="stat-label">Avg TTFT</div><div class="stat-sub">Time to 1st Token</div></div>
     <div class="stat-card"><div class="stat-val text-accent">${s.bestTime ? (s.bestTime/1000).toFixed(2)+'s' : '—'}</div><div class="stat-label">Best Response</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:var(--blue)">${s.avgTps ? s.avgTps.toFixed(1)+' t/s' : '—'}</div><div class="stat-label">Avg Throughput</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:var(--blue)">${s.avgTps ? s.avgTps.toFixed(1)+' t/s' : '—'}</div><div class="stat-label">Avg Throughput</div><div class="stat-sub">${s.throughputSampleCount || 0}/2 valid · CV ${s.throughputCv != null ? (s.throughputCv*100).toFixed(1)+'%' : '—'}</div></div>
   `;
 
   // Calculate Global Averages

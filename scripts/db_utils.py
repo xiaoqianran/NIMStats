@@ -68,7 +68,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
             last_capability_pass INTEGER,
             last_benchmark_version TEXT,
             last_throughput_at TEXT,
-            last_capability_at TEXT
+            last_capability_at TEXT,
+            last_throughput_sample_count INTEGER,
+            last_throughput_cv REAL
         );
         CREATE TABLE IF NOT EXISTS errors (
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +108,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             benchmark_version     TEXT,
             throughput_latency_ms INTEGER,
             throughput_ttft_ms    INTEGER,
+            throughput_sample_count INTEGER,
+            throughput_cv         REAL,
             PRIMARY KEY (run_id, model_id, test_kind)
         );
         CREATE TABLE IF NOT EXISTS scheduler_state (
@@ -146,6 +150,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("last_benchmark_version", "TEXT"),
         ("last_throughput_at", "TEXT"),
         ("last_capability_at", "TEXT"),
+        ("last_throughput_sample_count", "INTEGER"),
+        ("last_throughput_cv", "REAL"),
     ]:
         if col not in mcols:
             conn.execute(f"ALTER TABLE models ADD COLUMN {col} {decl}")
@@ -175,6 +181,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("benchmark_version", "TEXT"),
         ("throughput_latency_ms", "INTEGER"),
         ("throughput_ttft_ms", "INTEGER"),
+        ("throughput_sample_count", "INTEGER"),
+        ("throughput_cv", "REAL"),
     ]:
         if col not in mrcols:
             conn.execute(f"ALTER TABLE model_results ADD COLUMN {col} {decl}")
@@ -361,8 +369,9 @@ def write_rolling_batch(
                            (run_id, model_id, success, error_id, response_time, tokens_generated,
                             total_tokens, time_to_first_token, status, http_status, test_kind, decode_tps,
                             throughput_valid, chars_per_second, capability_score, capability_pass,
-                            format_pass, benchmark_version, throughput_latency_ms, throughput_ttft_ms)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            format_pass, benchmark_version, throughput_latency_ms, throughput_ttft_ms,
+                            throughput_sample_count, throughput_cv)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             run_id,
                             model_id,
@@ -384,6 +393,8 @@ def write_rolling_batch(
                             m.get("benchmarkVersion"),
                             m.get("throughputResponseTime"),
                             m.get("throughputTtft"),
+                            m.get("throughputSampleCount"),
+                            m.get("throughputCv"),
                         ),
                     )
                 except sqlite3.IntegrityError:
@@ -393,7 +404,8 @@ def write_rolling_batch(
                            total_tokens=?, time_to_first_token=?, status=?, http_status=?,
                            test_kind=?, decode_tps=?, throughput_valid=?, chars_per_second=?,
                            capability_score=?, capability_pass=?, format_pass=?, benchmark_version=?,
-                           throughput_latency_ms=?, throughput_ttft_ms=?
+                           throughput_latency_ms=?, throughput_ttft_ms=?,
+                           throughput_sample_count=?, throughput_cv=?
                            WHERE run_id=? AND model_id=?""",
                         (
                             1 if m.get("success") else 0,
@@ -414,6 +426,8 @@ def write_rolling_batch(
                             m.get("benchmarkVersion"),
                             m.get("throughputResponseTime"),
                             m.get("throughputTtft"),
+                            m.get("throughputSampleCount"),
+                            m.get("throughputCv"),
                             run_id,
                             model_id,
                         ),
@@ -449,6 +463,8 @@ def write_rolling_batch(
                    last_benchmark_version=COALESCE(?, last_benchmark_version),
                    last_throughput_at=CASE WHEN ? IS NULL THEN last_throughput_at ELSE ? END,
                    last_capability_at=CASE WHEN ? IS NULL THEN last_capability_at ELSE ? END
+                   ,last_throughput_sample_count=?,
+                   last_throughput_cv=?
                    WHERE id=?""",
                 (
                     status,
@@ -470,6 +486,8 @@ def write_rolling_batch(
                     timestamp,
                     primary.get("capabilityScore"),
                     timestamp,
+                    primary.get("throughputSampleCount"),
+                    primary.get("throughputCv"),
                     model_id,
                 ),
             )
@@ -526,7 +544,8 @@ def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
                       last_decode_tps, intelligence_score, last_throughput_valid,
                       last_chars_per_second, last_capability_score,
                       last_capability_pass, last_benchmark_version,
-                      last_throughput_at, last_capability_at
+                      last_throughput_at, last_capability_at,
+                      last_throughput_sample_count, last_throughput_cv
                FROM models ORDER BY name"""
         ).fetchall()
         models = []
@@ -555,6 +574,8 @@ def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
                     "last_benchmark_version": r[14],
                     "last_throughput_at": r[15],
                     "last_capability_at": r[16],
+                    "last_throughput_sample_count": r[17],
+                    "last_throughput_cv": r[18],
                 }
             )
         return {

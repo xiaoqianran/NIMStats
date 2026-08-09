@@ -1,6 +1,6 @@
 name: Rolling NIM Benchmark
 
-# Full-fleet monitor. Every model gets health; live chat models get speed + capability.
+# Full-fleet monitor. 100 models × 4 round-robin calls uses the 10-key 400 RPM pool.
 on:
   schedule:
     - cron: "*/5 * * * *"

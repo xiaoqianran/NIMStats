@@ -51,13 +51,15 @@ function loadFromDb(db) {
       `SELECT name, intelligence_score, current_status, last_checked_at, last_success_at,
               last_http_status, last_error, last_ttft_ms, last_latency_ms, last_decode_tps,
               last_throughput_valid, last_chars_per_second, last_capability_score,
-              last_capability_pass, last_benchmark_version
+              last_capability_pass, last_benchmark_version,
+              last_throughput_sample_count, last_throughput_cv
        FROM models ORDER BY name`
     );
     if (mq.length && mq[0].values.length) {
       for (const row of mq[0].values) {
         const [name, intel, cur, checked, successAt, httpSt, err, ttft, lat, tps,
-          throughputValid, charsPerSecond, capabilityScore, capabilityPass, benchmarkVersion] = row;
+          throughputValid, charsPerSecond, capabilityScore, capabilityPass, benchmarkVersion,
+          throughputSampleCount, throughputCv] = row;
         modelMeta[name] = {
           intelligence: intel != null ? intel : 50.0,
           currentStatus: cur || 'UNKNOWN',
@@ -74,6 +76,8 @@ function loadFromDb(db) {
           capabilityScore,
           capabilityPass: capabilityPass === 1,
           benchmarkVersion,
+          throughputSampleCount,
+          throughputCv,
         };
       }
     }
@@ -115,7 +119,8 @@ function loadFromDb(db) {
               mr.total_tokens, mr.time_to_first_token, mr.status, mr.http_status, mr.test_kind, mr.decode_tps,
               mr.throughput_valid, mr.chars_per_second, mr.capability_score,
               mr.capability_pass, mr.format_pass, mr.benchmark_version,
-              mr.throughput_latency_ms, mr.throughput_ttft_ms
+              mr.throughput_latency_ms, mr.throughput_ttft_ms,
+              mr.throughput_sample_count, mr.throughput_cv
        FROM model_results mr
        JOIN models m ON mr.model_id = m.id
        LEFT JOIN errors e ON mr.error_id = e.id
@@ -156,6 +161,8 @@ function loadFromDb(db) {
       const benchmarkVersion = row[17] != null ? row[17] : null;
       const throughputLatency = row[18] != null ? row[18] : null;
       const throughputTtft = row[19] != null ? row[19] : null;
+      const throughputSampleCount = row[20] != null ? row[20] : 0;
+      const throughputCv = row[21] != null ? row[21] : null;
       const key = `${run_id}||${model}`;
       const cand = {
         model,
@@ -177,6 +184,8 @@ function loadFromDb(db) {
         benchmarkVersion,
         throughputLatency,
         throughputTtft,
+        throughputSampleCount,
+        throughputCv,
       };
       const prev = bucket.get(key);
       if (!prev) {
@@ -249,6 +258,8 @@ function buildModelStats(runs, modelNames, modelIntel, modelMeta) {
       capabilityPass: meta.capabilityPass || false,
       charsPerSecond: meta.lastCharsPerSecond || null,
       benchmarkVersion: meta.benchmarkVersion || null,
+      throughputSampleCount: meta.throughputSampleCount || 0,
+      throughputCv: meta.throughputCv ?? null,
       wins: 0,
       errors: {},
       lastSeen: meta.lastSuccessAt || null,

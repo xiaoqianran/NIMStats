@@ -3,9 +3,9 @@
 
 Strategy:
   catalog → chat filter → stable sorted fleet → take next BATCH_SIZE models
-  (0 means the whole fleet). Every catalog model receives a tiny availability
-  probe. Successful chat models then receive controlled-throughput and locally
-  graded capability workloads. Requests run concurrently across a per-key 40
+  (0 means the whole fleet). Every catalog model receives exactly four calls:
+  health, two controlled-throughput samples, and one locally graded capability
+  workload. Requests run concurrently across a per-key 40
   RPM pool. Writes history.db and advances the cursor; the workflow deploys
   Pages after each completed run.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 import sys
 import time
 import urllib.error
@@ -352,149 +353,133 @@ def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str
 def run_model(
     model: str,
     key_pool: ApiKeyPool,
-    preferred_key_indexes: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Run health first, then speed and capability only for live chat models."""
+    """Use exactly four globally round-robin calls for every catalog model."""
     print(f"  [suite] {model}", flush=True)
-    candidate_indexes = list(
-        dict.fromkeys(preferred_key_indexes or range(key_pool.key_count))
+    health = chat_completion(
+        model=model,
+        prompt=HEALTH_PROMPT,
+        max_tokens=HEALTH_MAX_TOKENS,
+        stream=True,
+        key_pool=key_pool,
     )
-    tried_indexes: set[int] = set()
-    while True:
-        remaining = [index for index in candidate_indexes if index not in tried_indexes]
-        health = chat_completion(
-            model=model,
-            prompt=HEALTH_PROMPT,
-            max_tokens=HEALTH_MAX_TOKENS,
-            stream=True,
-            key_pool=key_pool,
-            preferred_key_indexes=remaining,
-        )
-        tried_indexes.add(health["apiKeyIndex"])
-        # A catalog entry can be entitled for one account but not another.
-        # Only declare it GONE after every key that listed it has returned GONE.
-        if health["status"] != STATUS_GONE or len(tried_indexes) >= len(candidate_indexes):
-            break
-
-    health_response = health.get("visibleResponseFull") or health.get("responseFull") or ""
-    row = {
-        "model": model,
-        "testKind": "suite-v3",
-        "benchmarkVersion": BENCHMARK_VERSION,
-        "success": health["success"],
-        "status": health["status"],
-        "httpStatus": health.get("httpStatus"),
-        "error": health.get("error"),
-        "responseTime": health.get("responseTime"),
-        "timeToFirstToken": health.get("timeToFirstToken"),
-        "response": health_response[:1000] or None,
-        "healthMarkerExact": health_response.strip() == HEALTH_MARKER,
-        "tokensGenerated": None,
-        "totalTokens": None,
-        "decodeTps": None,
-        "charsPerSecond": None,
-        "throughputValid": False,
-        "throughputResponseTime": None,
-        "throughputTtft": None,
-        "throughputMode": None,
-        "capabilityScore": None,
-        "capabilityPass": False,
-        "formatPass": False,
-        "capabilityChecks": None,
-        "keyAttempts": len(tried_indexes),
-    }
-
-    if health["success"]:
-        preferred = [health["apiKeyIndex"]]
-        throughput = chat_completion(
+    throughput_results = [
+        chat_completion(
             model=model,
             prompt=THROUGHPUT_PROMPT,
             max_tokens=THROUGHPUT_MAX_TOKENS,
             stream=True,
             key_pool=key_pool,
-            preferred_key_indexes=preferred,
             extra_payload={
                 "ignore_eos": True,
                 "stream_options": {"include_usage": True},
             },
         )
-        throughput_mode = "fixed-osl"
-        if throughput.get("httpStatus") in (400, 422):
-            throughput = chat_completion(
-                model=model,
-                prompt=THROUGHPUT_PROMPT,
-                max_tokens=THROUGHPUT_MAX_TOKENS,
-                stream=True,
-                key_pool=key_pool,
-                preferred_key_indexes=preferred,
+        for _ in range(2)
+    ]
+    capability = chat_completion(
+        model=model,
+        prompt=CAPABILITY_PROMPT,
+        max_tokens=CAPABILITY_MAX_TOKENS,
+        stream=False,
+        key_pool=key_pool,
+    )
+
+    all_results = [health, *throughput_results, capability]
+    successful_calls = [result for result in all_results if result.get("success")]
+    available = bool(successful_calls)
+    primary = health if health.get("success") else (successful_calls[0] if successful_calls else health)
+
+    health_response = health.get("visibleResponseFull") or health.get("responseFull") or ""
+    valid_throughput = []
+    char_rates = []
+    for result in throughput_results:
+        response = result.get("visibleResponseFull") or result.get("responseFull") or ""
+        char_rate = chars_per_second(
+            response,
+            result.get("responseTime"),
+            result.get("timeToFirstToken"),
+        )
+        if char_rate is not None:
+            char_rates.append(char_rate)
+        generated = result.get("tokensGenerated")
+        if result.get("success") and generated is not None and generated >= THROUGHPUT_MIN_VALID_TOKENS:
+            sample_tps = decode_tps(
+                generated,
+                result.get("responseTime"),
+                result.get("timeToFirstToken"),
             )
-            throughput_mode = "compat"
+            if sample_tps is not None:
+                valid_throughput.append((result, sample_tps))
 
-        throughput_response = (
-            throughput.get("visibleResponseFull")
-            or throughput.get("responseFull")
-            or ""
-        )
-        generated = throughput.get("tokensGenerated")
-        throughput_valid = bool(
-            throughput.get("success")
-            and generated is not None
-            and generated >= THROUGHPUT_MIN_VALID_TOKENS
-        )
-        row.update(
-            {
-                "tokensGenerated": generated,
-                "totalTokens": throughput.get("totalTokens"),
-                "throughputValid": throughput_valid,
-                "throughputResponseTime": throughput.get("responseTime"),
-                "throughputTtft": throughput.get("timeToFirstToken"),
-                "throughputMode": throughput_mode,
-                "decodeTps": decode_tps(
-                    generated,
-                    throughput.get("responseTime"),
-                    throughput.get("timeToFirstToken"),
-                ) if throughput_valid else None,
-                "charsPerSecond": chars_per_second(
-                    throughput_response,
-                    throughput.get("responseTime"),
-                    throughput.get("timeToFirstToken"),
-                ),
-                "throughputError": throughput.get("error"),
-            }
-        )
+    tps_samples = [sample[1] for sample in valid_throughput]
+    throughput_valid = bool(tps_samples)
+    aggregate_tps = round(statistics.median(tps_samples), 4) if tps_samples else None
+    throughput_cv = None
+    if len(tps_samples) >= 2 and statistics.mean(tps_samples) > 0:
+        throughput_cv = round(statistics.pstdev(tps_samples) / statistics.mean(tps_samples), 4)
+    throughput_latency = (
+        round(statistics.median([sample[0]["responseTime"] for sample in valid_throughput]))
+        if valid_throughput
+        else None
+    )
+    throughput_ttfts = [
+        sample[0].get("timeToFirstToken")
+        for sample in valid_throughput
+        if sample[0].get("timeToFirstToken") is not None
+    ]
+    throughput_ttft = round(statistics.median(throughput_ttfts)) if throughput_ttfts else None
+    generated_samples = [sample[0].get("tokensGenerated") for sample in valid_throughput]
+    total_samples = [
+        sample[0].get("totalTokens")
+        for sample in valid_throughput
+        if sample[0].get("totalTokens") is not None
+    ]
 
-        capability = chat_completion(
-            model=model,
-            prompt=CAPABILITY_PROMPT,
-            max_tokens=CAPABILITY_MAX_TOKENS,
-            stream=False,
-            key_pool=key_pool,
-            preferred_key_indexes=preferred,
-        )
-        capability_response = (
-            capability.get("visibleResponseFull")
-            or capability.get("responseFull")
-            or ""
-        )
-        grade = grade_capability_response(capability_response)
-        row.update(
-            {
-                "capabilityScore": grade["score"] if capability.get("success") else None,
-                "capabilityPass": grade["pass"] if capability.get("success") else False,
-                "formatPass": grade["formatPass"] if capability.get("success") else False,
-                "capabilityChecks": grade["checks"] if capability.get("success") else None,
-                "capabilityError": capability.get("error"),
-                "capabilityResponse": capability_response[:1000] or None,
-            }
-        )
-
-    mark = "OK" if health["success"] else health["status"]
+    capability_response = (
+        capability.get("visibleResponseFull")
+        or capability.get("responseFull")
+        or ""
+    )
+    grade = grade_capability_response(capability_response)
+    row = {
+        "model": model,
+        "testKind": "suite-v3",
+        "benchmarkVersion": BENCHMARK_VERSION,
+        "success": available,
+        "status": STATUS_AVAILABLE if available else health["status"],
+        "httpStatus": primary.get("httpStatus"),
+        "error": None if available else health.get("error"),
+        "responseTime": primary.get("responseTime"),
+        "timeToFirstToken": primary.get("timeToFirstToken"),
+        "response": health_response[:1000] or None,
+        "healthMarkerExact": health_response.strip() == HEALTH_MARKER,
+        "tokensGenerated": round(statistics.median(generated_samples)) if generated_samples else None,
+        "totalTokens": round(statistics.median(total_samples)) if total_samples else None,
+        "decodeTps": aggregate_tps,
+        "charsPerSecond": round(statistics.median(char_rates), 4) if char_rates else None,
+        "throughputValid": throughput_valid,
+        "throughputSampleCount": len(tps_samples),
+        "throughputCv": throughput_cv,
+        "throughputResponseTime": throughput_latency,
+        "throughputTtft": throughput_ttft,
+        "throughputMode": "fixed-osl",
+        "capabilityScore": grade["score"] if capability.get("success") else None,
+        "capabilityPass": grade["pass"] if capability.get("success") else False,
+        "formatPass": grade["formatPass"] if capability.get("success") else False,
+        "capabilityChecks": grade["checks"] if capability.get("success") else None,
+        "capabilityError": capability.get("error"),
+        "capabilityResponse": capability_response[:1000] or None,
+        "requestCount": 4,
+        "apiKeyIndexes": [result["apiKeyIndex"] for result in all_results],
+    }
+    mark = "OK" if available else health["status"]
     print(
-        f"    → {model} {mark} health={health.get('responseTime')}ms "
-        f"ttft={health.get('timeToFirstToken')} tok={row.get('tokensGenerated')} "
-        f"valid_osl={row.get('throughputValid')} tps={row.get('decodeTps')} "
-        f"suite={row.get('capabilityScore')} keys_tried={len(tried_indexes)} "
-        f"{health.get('error') or ''}",
+        f"    → {model} {mark} calls=4 keys={row['apiKeyIndexes']} "
+        f"health={row.get('responseTime')}ms ttft={row.get('timeToFirstToken')} "
+        f"valid_samples={row.get('throughputSampleCount')}/2 "
+        f"tps={row.get('decodeTps')} cv={row.get('throughputCv')} "
+        f"suite={row.get('capabilityScore')} {row.get('error') or ''}",
         flush=True,
     )
     return row
@@ -509,9 +494,11 @@ def main() -> int:
 
     # 1) Full retained fleet from the union of every key-specific catalog.
     key_pool = ApiKeyPool(API_KEYS)
-    catalog_keys = [key_pool.acquire() for _ in range(key_pool.key_count)]
+    # The user explicitly guarantees all ten keys have identical entitlements;
+    # one catalog request is enough and leaves the pool for round-robin inference.
+    catalog_keys = [key_pool.acquire()]
     fleet, catalog_meta = get_benchmark_models(api_keys=catalog_keys, verbose=True)
-    model_key_indexes = catalog_meta.pop("model_key_indexes", {})
+    catalog_meta.pop("model_key_indexes", None)
     fleet = sorted(set(fleet))
     if not fleet:
         print("No models in catalog", file=sys.stderr)
@@ -544,7 +531,7 @@ def main() -> int:
     )
     with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
         futures = {
-            executor.submit(run_model, model, key_pool, model_key_indexes.get(model)): model
+            executor.submit(run_model, model, key_pool): model
             for model in batch
         }
         for future in as_completed(futures):
@@ -618,6 +605,11 @@ def main() -> int:
         "rateLimitRpm": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "40")),
         "apiKeyCount": key_pool.key_count,
         "requestCount": key_pool.request_count,
+        "requestsPerModel": 4,
+        "requestsByKey": {
+            str(index): sum(row.get("apiKeyIndexes", []).count(index) for row in all_rows)
+            for index in range(key_pool.key_count)
+        },
         "maxInFlight": max_workers,
     }
     RESULTS_OUT.write_text(

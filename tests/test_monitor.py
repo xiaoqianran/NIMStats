@@ -10,13 +10,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from api_key_pool import load_api_keys  # noqa: E402
+from api_key_pool import ApiKeyPool, load_api_keys  # noqa: E402
 from benchmark_suite import CAPABILITY_EXPECTED, grade_capability_response  # noqa: E402
 from build_pages import build_site  # noqa: E402
 from db_utils import sanitize_error  # noqa: E402
 from model_catalog import classify_model, is_chat_model, refresh_models  # noqa: E402
 from rate_limiter import RateLimiter  # noqa: E402
-from rolling_bench import next_batch  # noqa: E402
+from rolling_bench import next_batch, run_model  # noqa: E402
 
 
 class FakeTime:
@@ -48,6 +48,14 @@ class MonitorTests(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(load_api_keys(), ["key-a", "key-b", "key-c"])
+
+    def test_four_hundred_calls_are_evenly_distributed_across_ten_keys(self) -> None:
+        pool = ApiKeyPool([f"key-{i}" for i in range(10)], max_per_minute=1_000_000)
+        counts = [0] * 10
+        for _ in range(400):
+            index, _ = pool.acquire_with_index()
+            counts[index] += 1
+        self.assertEqual(counts, [40] * 10)
 
     def test_diffusiongemma_is_not_name_filtered(self) -> None:
         model = "google/diffusiongemma-26b-a4b-it"
@@ -105,6 +113,38 @@ class MonitorTests(unittest.TestCase):
         wrapped = grade_capability_response(f"```json\n{exact}\n```")
         self.assertEqual(wrapped["score"], 85.0)
         self.assertFalse(wrapped["pass"])
+
+    def test_model_suite_always_makes_four_calls_and_aggregates_two_samples(self) -> None:
+        exact = __import__("json").dumps(CAPABILITY_EXPECTED, separators=(",", ":"))
+        health = {
+            "success": True, "status": "AVAILABLE", "httpStatus": 200,
+            "responseTime": 120, "timeToFirstToken": 60,
+            "visibleResponseFull": "NIM_OK_7F3A", "apiKeyIndex": 0,
+        }
+        throughput_a = {
+            "success": True, "status": "AVAILABLE", "httpStatus": 200,
+            "responseTime": 1100, "timeToFirstToken": 100,
+            "tokensGenerated": 128, "totalTokens": 200,
+            "visibleResponseFull": "a" * 512, "apiKeyIndex": 1,
+        }
+        throughput_b = {
+            **throughput_a, "responseTime": 1200, "timeToFirstToken": 200,
+            "apiKeyIndex": 2,
+        }
+        capability = {
+            "success": True, "status": "AVAILABLE", "httpStatus": 200,
+            "responseTime": 500, "timeToFirstToken": None,
+            "visibleResponseFull": exact, "apiKeyIndex": 3,
+        }
+        with patch(
+            "rolling_bench.chat_completion",
+            side_effect=[health, throughput_a, throughput_b, capability],
+        ) as completion:
+            row = run_model("org/model", object())
+        self.assertEqual(completion.call_count, 4)
+        self.assertEqual(row["apiKeyIndexes"], [0, 1, 2, 3])
+        self.assertEqual(row["throughputSampleCount"], 2)
+        self.assertEqual(row["capabilityScore"], 100.0)
 
     def test_pages_build_is_whitelisted_and_has_api_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
