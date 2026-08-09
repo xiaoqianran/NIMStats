@@ -109,6 +109,8 @@ python3 scripts/manage_models.py allow some-org/model
 
 `history.db` 是面板的 SQLite 数据源，浏览器通过 sql.js 在本地查询。`scripts/models_cache.json` 保存所有密钥目录的并集；`scripts/fleet_snapshot.json` 是当前舰队状态快照。临时的 `scripts/results.json` 不提交。
 
+历史趋势只保留每批恰好包含 100 个不同模型结果的完整测试；早期 2、4、9、76 模型的试运行数据已清除，避免不同样本规模污染成功率、趋势和排行榜。
+
 性能数据会受到模型冷启动、共享服务负载、网络、模型分词器和输出服从度影响，只适合趋势观察，不应视为严格的实验室评测或服务等级承诺。
 
 ## 使用声明与致谢
