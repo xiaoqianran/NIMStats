@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from api_key_pool import load_api_keys  # noqa: E402
 from build_pages import build_site  # noqa: E402
+from db_utils import sanitize_error  # noqa: E402
 from model_catalog import classify_model, is_chat_model, refresh_models  # noqa: E402
 from rate_limiter import RateLimiter  # noqa: E402
 from rolling_bench import next_batch  # noqa: E402
@@ -51,6 +52,12 @@ class MonitorTests(unittest.TestCase):
         model = "google/diffusiongemma-26b-a4b-it"
         self.assertTrue(is_chat_model(model))
         self.assertEqual(classify_model(model), "chat")
+
+    def test_provider_account_ids_are_redacted(self) -> None:
+        self.assertEqual(
+            sanitize_error("Function missing for account 'sensitive-id'"),
+            "Function missing for account 'redacted'",
+        )
 
     def test_catalogs_are_unioned_and_key_coverage_is_retained(self) -> None:
         catalogs = {

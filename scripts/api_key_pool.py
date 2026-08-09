@@ -60,8 +60,10 @@ class ApiKeyPool:
         with self._lock:
             return self._acquires
 
-    def acquire(self, preferred_indexes: list[int] | None = None) -> str:
-        """Return a rate-limited key, preferring keys that listed the model."""
+    def acquire_with_index(
+        self, preferred_indexes: list[int] | None = None
+    ) -> tuple[int, str]:
+        """Return ``(index, key)`` while preferring keys that listed the model."""
         with self._lock:
             allowed = {
                 index
@@ -79,4 +81,8 @@ class ApiKeyPool:
             self._next = (index + 1) % len(self._slots)
             self._acquires += 1
         slot.limiter.wait()
-        return slot.key
+        return index, slot.key
+
+    def acquire(self, preferred_indexes: list[int] | None = None) -> str:
+        """Return a rate-limited key. The key value must never be logged."""
+        return self.acquire_with_index(preferred_indexes)[1]

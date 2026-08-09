@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,17 @@ STATUS_TIMEOUT = "TIMEOUT"
 STATUS_ERROR = "ERROR"
 STATUS_STALE = "STALE"
 STATUS_UNKNOWN = "UNKNOWN"
+
+
+def sanitize_error(message: str | None) -> str | None:
+    """Remove provider account identifiers from public history and logs."""
+    if not message:
+        return message
+    return re.sub(
+        r"(?i)(account\s+['\"])[^'\"]+(['\"])",
+        r"\1redacted\2",
+        message,
+    )
 
 
 def utc_now() -> str:
@@ -90,6 +102,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         """
     )
     _migrate_columns(conn)
+    _sanitize_stored_errors(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_models_status ON models(current_status)"
     )
@@ -139,6 +152,35 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     # Old DBs may have PRIMARY KEY (run_id, model_id) without test_kind.
     # SQLite cannot easily alter PK; new inserts use test_kind column.
     # For uniqueness on old schema, we tolerate duplicate risk by using REPLACE in write.
+
+
+def _sanitize_stored_errors(conn: sqlite3.Connection) -> None:
+    """One-way cleanup for account IDs stored by older benchmark versions."""
+    for error_id, text in conn.execute("SELECT id, text FROM errors").fetchall():
+        cleaned = sanitize_error(text)
+        if cleaned == text:
+            continue
+        existing = conn.execute(
+            "SELECT id FROM errors WHERE text = ?", (cleaned,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE model_results SET error_id = ? WHERE error_id = ?",
+                (existing[0], error_id),
+            )
+            conn.execute("DELETE FROM errors WHERE id = ?", (error_id,))
+        else:
+            conn.execute(
+                "UPDATE errors SET text = ? WHERE id = ?", (cleaned, error_id)
+            )
+    for model_id, error in conn.execute(
+        "SELECT id, last_error FROM models WHERE last_error IS NOT NULL"
+    ).fetchall():
+        cleaned = sanitize_error(error)
+        if cleaned != error:
+            conn.execute(
+                "UPDATE models SET last_error = ? WHERE id = ?", (cleaned, model_id)
+            )
 
 
 def _get_or_create(conn: sqlite3.Connection, table: str, col: str, value: Any) -> int | None:
@@ -277,7 +319,9 @@ def write_rolling_batch(
             # Also store raw health/throughput detail rows when schema allows (test_kind in PK)
             detail_rows = rows
             for m in [primary]:
-                error_id = _get_or_create(conn, "errors", "text", m.get("error"))
+                error_id = _get_or_create(
+                    conn, "errors", "text", sanitize_error(m.get("error"))
+                )
                 test_kind = m.get("testKind") or "legacy"
                 conn.execute(
                     "DELETE FROM model_results WHERE run_id=? AND model_id=?",
@@ -356,7 +400,7 @@ def write_rolling_batch(
                     checked_at,
                     last_success,
                     health.get("httpStatus"),
-                    health.get("error"),
+                    sanitize_error(health.get("error")),
                     health.get("timeToFirstToken") if health.get("success") else None,
                     metric_src.get("responseTime") if metric_src.get("success") else health.get("responseTime"),
                     metric_src.get("decodeTps") if metric_src and metric_src.get("success") else None,

@@ -35,6 +35,7 @@ from db_utils import (  # noqa: E402
     export_fleet_snapshot,
     get_state,
     init_schema,
+    sanitize_error,
     set_state,
     utc_now,
     write_rolling_batch,
@@ -140,18 +141,18 @@ def _parse_error_body(body: str, code: int) -> str:
         title = data.get("title")
         err = data.get("error")
         if title and detail:
-            return f"HTTP {code}: {title}: {detail}"
+            return sanitize_error(f"HTTP {code}: {title}: {detail}") or f"HTTP {code}"
         if isinstance(err, dict):
-            return f"HTTP {code}: {err.get('message') or err}"
+            return sanitize_error(f"HTTP {code}: {err.get('message') or err}") or f"HTTP {code}"
         if isinstance(err, str):
-            return f"HTTP {code}: {err}"
+            return sanitize_error(f"HTTP {code}: {err}") or f"HTTP {code}"
         if detail:
-            return f"HTTP {code}: {detail}"
+            return sanitize_error(f"HTTP {code}: {detail}") or f"HTTP {code}"
         if title:
-            return f"HTTP {code}: {title}"
+            return sanitize_error(f"HTTP {code}: {title}") or f"HTTP {code}"
     except json.JSONDecodeError:
         pass
-    return f"HTTP {code}: {body[:240]}"
+    return sanitize_error(f"HTTP {code}: {body[:240]}") or f"HTTP {code}"
 
 
 def chat_completion(
@@ -164,7 +165,7 @@ def chat_completion(
     preferred_key_indexes: list[int] | None = None,
 ) -> dict[str, Any]:
     """One API call using a rate-limited key from the shared pool."""
-    api_key = key_pool.acquire(preferred_key_indexes)
+    api_key_index, api_key = key_pool.acquire_with_index(preferred_key_indexes)
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -190,6 +191,7 @@ def chat_completion(
             http_status = getattr(resp, "status", 200) or 200
             if stream:
                 content_parts: list[str] = []
+                reasoning_parts: list[str] = []
                 ttft_ms: int | None = None
                 completion_tokens = 0
                 total_tokens = 0
@@ -207,30 +209,35 @@ def chat_completion(
                     choices = chunk.get("choices") or []
                     if choices:
                         delta = choices[0].get("delta") or {}
-                        text = (
-                            delta.get("content")
-                            or delta.get("reasoning_content")
+                        content_text = delta.get("content") or ""
+                        reasoning_text = (
+                            delta.get("reasoning_content")
                             or delta.get("reasoning")
                             or ""
                         )
-                        if not text:
+                        if not content_text and not reasoning_text:
                             msg = choices[0].get("message") or {}
-                            text = (
-                                msg.get("content")
-                                or msg.get("reasoning_content")
+                            content_text = msg.get("content") or ""
+                            reasoning_text = (
+                                msg.get("reasoning_content")
                                 or msg.get("reasoning")
                                 or ""
                             )
-                        if text:
+                        if content_text or reasoning_text:
                             if ttft_ms is None:
                                 ttft_ms = int((time.perf_counter() - started) * 1000)
-                            content_parts.append(text)
+                            if content_text:
+                                content_parts.append(str(content_text))
+                            if reasoning_text:
+                                reasoning_parts.append(str(reasoning_text))
                     usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else None
                     if usage:
                         completion_tokens = int(usage.get("completion_tokens") or 0) or completion_tokens
                         total_tokens = int(usage.get("total_tokens") or 0) or total_tokens
                 latency = int((time.perf_counter() - started) * 1000)
-                content = "".join(content_parts)
+                visible_content = "".join(content_parts)
+                reasoning_content = "".join(reasoning_parts)
+                content = visible_content or reasoning_content
                 ok = bool(content.strip()) or completion_tokens > 0
                 status = STATUS_AVAILABLE if ok and 200 <= http_status < 300 else STATUS_ERROR
                 return {
@@ -242,6 +249,8 @@ def chat_completion(
                     "tokensGenerated": completion_tokens or None,
                     "totalTokens": total_tokens or None,
                     "response": content[:500] if content else None,
+                    "visibleResponse": visible_content[:500] if visible_content else None,
+                    "apiKeyIndex": api_key_index,
                     "error": None if ok else "No content in stream response",
                 }
             # non-stream
@@ -271,6 +280,8 @@ def chat_completion(
                 "tokensGenerated": ct or None,
                 "totalTokens": tt or None,
                 "response": str(content)[:500] if content else None,
+                "visibleResponse": str(content)[:500] if content else None,
+                "apiKeyIndex": api_key_index,
                 "error": None if ok else "Empty response",
             }
     except urllib.error.HTTPError as exc:
@@ -289,6 +300,7 @@ def chat_completion(
             "totalTokens": None,
             "response": None,
             "error": msg,
+            "apiKeyIndex": api_key_index,
         }
     except Exception as exc:  # noqa: BLE001
         latency = int((time.perf_counter() - started) * 1000)
@@ -304,6 +316,7 @@ def chat_completion(
             "totalTokens": None,
             "response": None,
             "error": f"{type(exc).__name__}: {exc}",
+            "apiKeyIndex": api_key_index,
         }
 
 
@@ -328,15 +341,28 @@ def run_model(
 ) -> dict[str, Any]:
     """Run the unified availability + latency + throughput benchmark."""
     print(f"  [benchmark] {model}", flush=True)
-    result = chat_completion(
-        model=model,
-        prompt=BENCHMARK_PROMPT,
-        max_tokens=BENCHMARK_MAX_TOKENS,
-        stream=True,
-        key_pool=key_pool,
-        preferred_key_indexes=preferred_key_indexes,
+    candidate_indexes = list(
+        dict.fromkeys(preferred_key_indexes or range(key_pool.key_count))
     )
-    response = result.get("response") or ""
+    tried_indexes: set[int] = set()
+    result: dict[str, Any]
+    while True:
+        remaining = [index for index in candidate_indexes if index not in tried_indexes]
+        result = chat_completion(
+            model=model,
+            prompt=BENCHMARK_PROMPT,
+            max_tokens=BENCHMARK_MAX_TOKENS,
+            stream=True,
+            key_pool=key_pool,
+            preferred_key_indexes=remaining,
+        )
+        tried_indexes.add(result["apiKeyIndex"])
+        # A catalog entry can be entitled for one account but not another.
+        # Only declare it GONE after every key that listed it has returned GONE.
+        if result["status"] != STATUS_GONE or len(tried_indexes) >= len(candidate_indexes):
+            break
+
+    response = result.get("visibleResponse") or result.get("response") or ""
     row = {
         "model": model,
         "testKind": "throughput",
@@ -356,13 +382,15 @@ def run_model(
         ),
         "response": response or None,
         "responseMatchesPayload": response.strip() == BENCHMARK_PAYLOAD,
+        "keyAttempts": len(tried_indexes),
     }
     mark = "OK" if result["success"] else result["status"]
     compliance = "exact" if row["responseMatchesPayload"] else "non-exact"
     print(
         f"    → {mark} e2e={result.get('responseTime')}ms "
         f"ttft={result.get('timeToFirstToken')} tok={result.get('tokensGenerated')} "
-        f"tps={row.get('decodeTps')} output={compliance} {result.get('error') or ''}",
+        f"tps={row.get('decodeTps')} output={compliance} "
+        f"keys_tried={len(tried_indexes)} {result.get('error') or ''}",
         flush=True,
     )
     return row
