@@ -48,3 +48,5 @@ scripts/availability_cache.json
 scripts/results.json
 history.upstream-backup.db
 .codegraph/
+# Added by code-review-graph
+.code-review-graph/
