@@ -42,3 +42,9 @@ scripts/__pycache__/
 
 .codegraph/
 history.upstream-backup.db
+
+# Rolling monitor runtime
+scripts/availability_cache.json
+scripts/results.json
+history.upstream-backup.db
+.codegraph/

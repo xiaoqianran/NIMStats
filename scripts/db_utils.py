@@ -1,18 +1,38 @@
-"""Shared SQLite utilities for reading/writing benchmark history."""
+"""Shared SQLite utilities for rolling NIM fleet monitoring."""
 
+from __future__ import annotations
+
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HISTORY_DB = REPO_ROOT / "history.db"
-MAX_RUNS = 720
+MAX_RUNS = int(__import__("os").getenv("MAX_HISTORY_RUNS", "2000"))
+# Models not re-checked within this window surface as STALE on the dashboard
+STALE_AFTER_MINUTES = int(__import__("os").getenv("STALE_AFTER_MINUTES", "180"))
+
+STATUS_AVAILABLE = "AVAILABLE"
+STATUS_GONE = "GONE"
+STATUS_UNAUTHORIZED = "UNAUTHORIZED"
+STATUS_RATE_LIMITED = "RATE_LIMITED"
+STATUS_TIMEOUT = "TIMEOUT"
+STATUS_ERROR = "ERROR"
+STATUS_STALE = "STALE"
+STATUS_UNKNOWN = "UNKNOWN"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.executescript("""
+    conn.executescript(
+        """
         CREATE TABLE IF NOT EXISTS prompts (
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
             text TEXT NOT NULL UNIQUE
@@ -20,7 +40,16 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS models (
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
-            intelligence_score REAL DEFAULT NULL
+            intelligence_score REAL DEFAULT NULL,
+            current_status TEXT DEFAULT 'UNKNOWN',
+            last_checked_at TEXT,
+            last_success_at TEXT,
+            last_http_status INTEGER,
+            last_error TEXT,
+            last_ttft_ms INTEGER,
+            last_latency_ms INTEGER,
+            last_decode_tps REAL,
+            last_test_kind TEXT
         );
         CREATE TABLE IF NOT EXISTS errors (
             id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +60,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
             timestamp        TEXT    NOT NULL,
             prompt_id        INTEGER NOT NULL REFERENCES prompts(id),
             fastest_model_id INTEGER          REFERENCES models(id),
-            fastest_time     INTEGER
+            fastest_time     INTEGER,
+            batch_size       INTEGER,
+            cursor_start     INTEGER,
+            cursor_end       INTEGER,
+            kind             TEXT DEFAULT 'rolling'
         );
         CREATE TABLE IF NOT EXISTS model_results (
             run_id                INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -42,26 +75,74 @@ def init_schema(conn: sqlite3.Connection) -> None:
             tokens_generated      INTEGER,
             total_tokens          INTEGER,
             time_to_first_token   INTEGER,
-            PRIMARY KEY (run_id, model_id)
+            status                TEXT,
+            http_status           INTEGER,
+            test_kind             TEXT,
+            decode_tps            REAL,
+            PRIMARY KEY (run_id, model_id, test_kind)
+        );
+        CREATE TABLE IF NOT EXISTS scheduler_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_runs_ts  ON runs(timestamp);
         CREATE INDEX IF NOT EXISTS idx_mr_model ON model_results(model_id);
-    """)
+        """
+    )
+    _migrate_columns(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_models_status ON models(current_status)"
+    )
 
-    # Ensure backward compatibility for existing databases
-    cursor = conn.execute("PRAGMA table_info(models)")
-    columns = [row[1] for row in cursor.fetchall()]
-    if "intelligence_score" not in columns:
-        conn.execute("ALTER TABLE models ADD COLUMN intelligence_score REAL DEFAULT NULL")
 
-    cursor = conn.execute("PRAGMA table_info(model_results)")
-    mr_columns = [row[1] for row in cursor.fetchall()]
-    if "time_to_first_token" not in mr_columns:
-        conn.execute("ALTER TABLE model_results ADD COLUMN time_to_first_token INTEGER")
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    def cols(table: str) -> set[str]:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+    mcols = cols("models")
+    for col, decl in [
+        ("intelligence_score", "REAL DEFAULT NULL"),
+        ("current_status", "TEXT DEFAULT 'UNKNOWN'"),
+        ("last_checked_at", "TEXT"),
+        ("last_success_at", "TEXT"),
+        ("last_http_status", "INTEGER"),
+        ("last_error", "TEXT"),
+        ("last_ttft_ms", "INTEGER"),
+        ("last_latency_ms", "INTEGER"),
+        ("last_decode_tps", "REAL"),
+        ("last_test_kind", "TEXT"),
+    ]:
+        if col not in mcols:
+            conn.execute(f"ALTER TABLE models ADD COLUMN {col} {decl}")
+
+    rcols = cols("runs")
+    for col, decl in [
+        ("batch_size", "INTEGER"),
+        ("cursor_start", "INTEGER"),
+        ("cursor_end", "INTEGER"),
+        ("kind", "TEXT DEFAULT 'rolling'"),
+    ]:
+        if col not in rcols:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
+
+    mrcols = cols("model_results")
+    for col, decl in [
+        ("time_to_first_token", "INTEGER"),
+        ("status", "TEXT"),
+        ("http_status", "INTEGER"),
+        ("test_kind", "TEXT DEFAULT 'legacy'"),
+        ("decode_tps", "REAL"),
+    ]:
+        if col not in mrcols:
+            conn.execute(f"ALTER TABLE model_results ADD COLUMN {col} {decl}")
+
+    # Old DBs may have PRIMARY KEY (run_id, model_id) without test_kind.
+    # SQLite cannot easily alter PK; new inserts use test_kind column.
+    # For uniqueness on old schema, we tolerate duplicate risk by using REPLACE in write.
 
 
 def _get_or_create(conn: sqlite3.Connection, table: str, col: str, value: Any) -> int | None:
-    if not value:
+    if value is None or value == "":
         return None
     row = conn.execute(f"SELECT id FROM {table} WHERE {col} = ?", (value,)).fetchone()
     if row:
@@ -70,38 +151,219 @@ def _get_or_create(conn: sqlite3.Connection, table: str, col: str, value: Any) -
     return cur.lastrowid
 
 
-def write_run(run: dict[str, Any], db_path: Path = HISTORY_DB) -> None:
-    """Insert a benchmark run into the database and prune runs beyond MAX_RUNS."""
-    summary = run.get("summary", {})
+def get_state(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    row = conn.execute("SELECT value FROM scheduler_state WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_state(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO scheduler_state(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def ensure_models(conn: sqlite3.Connection, names: list[str]) -> None:
+    for name in names:
+        conn.execute(
+            "INSERT OR IGNORE INTO models(name, current_status) VALUES(?, ?)",
+            (name, STATUS_UNKNOWN),
+        )
+
+
+def compute_display_status(
+    current_status: str | None,
+    last_checked_at: str | None,
+    *,
+    now: datetime | None = None,
+    stale_after_minutes: int = STALE_AFTER_MINUTES,
+) -> str:
+    """Per-model display status: STALE if last check too old."""
+    status = current_status or STATUS_UNKNOWN
+    if not last_checked_at:
+        return STATUS_STALE if status == STATUS_AVAILABLE else status
+    try:
+        checked = datetime.strptime(last_checked_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return STATUS_STALE
+    now = now or datetime.now(timezone.utc)
+    age_min = (now - checked).total_seconds() / 60.0
+    if age_min > stale_after_minutes:
+        return STATUS_STALE
+    return status
+
+
+def write_rolling_batch(
+    *,
+    timestamp: str,
+    prompt: str,
+    models: list[dict[str, Any]],
+    batch_meta: dict[str, Any] | None = None,
+    db_path: Path = HISTORY_DB,
+) -> int:
+    """
+    Persist one rolling batch run.
+    `models` items may include multiple test_kind rows (health/throughput);
+    we store one model_results row per (model, test_kind). For dashboard
+    historical series we also keep a preferred 'primary' row per model in the
+    run (health if present else first).
+    """
+    batch_meta = batch_meta or {}
     conn = sqlite3.connect(str(db_path))
     try:
         init_schema(conn)
-        prompt_id = _get_or_create(conn, "prompts", "text", run.get("prompt"))
-        fastest_model_id = _get_or_create(conn, "models", "name", summary.get("fastestModel"))
+        prompt_id = _get_or_create(conn, "prompts", "text", prompt)
+
+        # Fastest among successful throughput (or health) latencies
+        successful = [
+            m
+            for m in models
+            if m.get("success") and isinstance(m.get("responseTime"), int)
+        ]
+        fastest_model_id = None
+        fastest_time = None
+        if successful:
+            # Prefer throughput test for "fastest", else health
+            thr = [m for m in successful if m.get("testKind") == "throughput"]
+            pool = thr or successful
+            best = min(pool, key=lambda x: x["responseTime"])
+            fastest_model_id = _get_or_create(conn, "models", "name", best.get("model"))
+            fastest_time = best["responseTime"]
 
         cur = conn.execute(
-            """INSERT INTO runs (timestamp, prompt_id, fastest_model_id, fastest_time)
-               VALUES (?, ?, ?, ?)""",
-            (run.get("timestamp"), prompt_id, fastest_model_id, summary.get("fastestTime")),
+            """INSERT INTO runs
+               (timestamp, prompt_id, fastest_model_id, fastest_time, batch_size, cursor_start, cursor_end, kind)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                timestamp,
+                prompt_id,
+                fastest_model_id,
+                fastest_time,
+                batch_meta.get("batch_size"),
+                batch_meta.get("cursor_start"),
+                batch_meta.get("cursor_end"),
+                batch_meta.get("kind", "rolling"),
+            ),
         )
         run_id = cur.lastrowid
 
-        for m in run.get("models", []):
-            model_id = _get_or_create(conn, "models", "name", m.get("model"))
-            error_id = _get_or_create(conn, "errors", "text", m.get("error"))
+        # Group by model for current_status update (health defines availability)
+        by_model: dict[str, list[dict[str, Any]]] = {}
+        for m in models:
+            by_model.setdefault(m["model"], []).append(m)
+
+        for model_name, rows in by_model.items():
+            model_id = _get_or_create(conn, "models", "name", model_name)
+            health = next((r for r in rows if r.get("testKind") == "health"), rows[0])
+            thr = next((r for r in rows if r.get("testKind") == "throughput"), None)
+
+            # One historical row per model per run (SQLite PK compat + simple charts):
+            # availability/status from health; latency/tps prefer successful throughput.
+            primary = dict(health)
+            if thr and thr.get("success"):
+                primary = {
+                    **health,
+                    "success": True if health.get("success") else thr.get("success"),
+                    "responseTime": thr.get("responseTime"),
+                    "tokensGenerated": thr.get("tokensGenerated"),
+                    "totalTokens": thr.get("totalTokens"),
+                    "timeToFirstToken": thr.get("timeToFirstToken") or health.get("timeToFirstToken"),
+                    "decodeTps": thr.get("decodeTps"),
+                    "testKind": "throughput",
+                }
+            elif thr and not health.get("success"):
+                # health failed — keep health status as availability truth
+                primary = dict(health)
+
+            # Also store raw health/throughput detail rows when schema allows (test_kind in PK)
+            detail_rows = rows
+            for m in [primary]:
+                error_id = _get_or_create(conn, "errors", "text", m.get("error"))
+                test_kind = m.get("testKind") or "legacy"
+                conn.execute(
+                    "DELETE FROM model_results WHERE run_id=? AND model_id=?",
+                    (run_id, model_id),
+                )
+                try:
+                    conn.execute(
+                        """INSERT INTO model_results
+                           (run_id, model_id, success, error_id, response_time, tokens_generated,
+                            total_tokens, time_to_first_token, status, http_status, test_kind, decode_tps)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            run_id,
+                            model_id,
+                            1 if m.get("success") else 0,
+                            error_id,
+                            m.get("responseTime"),
+                            m.get("tokensGenerated"),
+                            m.get("totalTokens"),
+                            m.get("timeToFirstToken"),
+                            m.get("status"),
+                            m.get("httpStatus"),
+                            test_kind,
+                            m.get("decodeTps"),
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    conn.execute(
+                        """UPDATE model_results SET
+                           success=?, error_id=?, response_time=?, tokens_generated=?,
+                           total_tokens=?, time_to_first_token=?, status=?, http_status=?,
+                           test_kind=?, decode_tps=?
+                           WHERE run_id=? AND model_id=?""",
+                        (
+                            1 if m.get("success") else 0,
+                            error_id,
+                            m.get("responseTime"),
+                            m.get("tokensGenerated"),
+                            m.get("totalTokens"),
+                            m.get("timeToFirstToken"),
+                            m.get("status"),
+                            m.get("httpStatus"),
+                            test_kind,
+                            m.get("decodeTps"),
+                            run_id,
+                            model_id,
+                        ),
+                    )
+
+            status = health.get("status") or (
+                STATUS_AVAILABLE if health.get("success") else STATUS_ERROR
+            )
+            checked_at = timestamp
+            last_success = timestamp if (health.get("success") or (thr and thr.get("success"))) else None
+            prev = conn.execute(
+                "SELECT last_success_at FROM models WHERE id=?", (model_id,)
+            ).fetchone()
+            if not last_success and prev and prev[0]:
+                last_success = prev[0]
+
+            metric_src = thr if (thr and thr.get("success")) else health
             conn.execute(
-                """INSERT INTO model_results
-                   (run_id, model_id, success, error_id, response_time, tokens_generated, total_tokens, time_to_first_token)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                """UPDATE models SET
+                   current_status=?,
+                   last_checked_at=?,
+                   last_success_at=COALESCE(?, last_success_at),
+                   last_http_status=?,
+                   last_error=?,
+                   last_ttft_ms=?,
+                   last_latency_ms=?,
+                   last_decode_tps=?,
+                   last_test_kind=?
+                   WHERE id=?""",
                 (
-                    run_id,
+                    status,
+                    checked_at,
+                    last_success,
+                    health.get("httpStatus"),
+                    health.get("error"),
+                    health.get("timeToFirstToken") if health.get("success") else None,
+                    metric_src.get("responseTime") if metric_src.get("success") else health.get("responseTime"),
+                    metric_src.get("decodeTps") if metric_src and metric_src.get("success") else None,
+                    metric_src.get("testKind") if metric_src else health.get("testKind"),
                     model_id,
-                    1 if m.get("success") else 0,
-                    error_id,
-                    m.get("responseTime"),
-                    m.get("tokensGenerated"),
-                    m.get("totalTokens"),
-                    m.get("timeToFirstToken"),
                 ),
             )
 
@@ -110,5 +372,79 @@ def write_run(run: dict[str, Any], db_path: Path = HISTORY_DB) -> None:
             f"(SELECT id FROM runs ORDER BY timestamp DESC LIMIT {MAX_RUNS})"
         )
         conn.commit()
+        return int(run_id or 0)
+    finally:
+        conn.close()
+
+
+def write_run(run: dict[str, Any], db_path: Path = HISTORY_DB) -> None:
+    """Backward-compatible wrapper used by older scripts."""
+    models = run.get("models") or []
+    # normalize keys
+    norm = []
+    for m in models:
+        norm.append(
+            {
+                "model": m.get("model"),
+                "success": m.get("success"),
+                "error": m.get("error"),
+                "responseTime": m.get("responseTime"),
+                "tokensGenerated": m.get("tokensGenerated"),
+                "totalTokens": m.get("totalTokens"),
+                "timeToFirstToken": m.get("timeToFirstToken"),
+                "status": m.get("status")
+                or (STATUS_AVAILABLE if m.get("success") else STATUS_ERROR),
+                "httpStatus": m.get("httpStatus"),
+                "testKind": m.get("testKind") or "legacy",
+                "decodeTps": m.get("decodeTps"),
+            }
+        )
+    write_rolling_batch(
+        timestamp=run.get("timestamp") or utc_now(),
+        prompt=run.get("prompt") or "",
+        models=norm,
+        batch_meta={"kind": "legacy", "batch_size": len({m["model"] for m in norm})},
+        db_path=db_path,
+    )
+
+
+def export_fleet_snapshot(db_path: Path = HISTORY_DB) -> dict[str, Any]:
+    """JSON-serializable fleet snapshot for debugging / optional static API."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        init_schema(conn)
+        rows = conn.execute(
+            """SELECT name, current_status, last_checked_at, last_success_at,
+                      last_http_status, last_error, last_ttft_ms, last_latency_ms,
+                      last_decode_tps, intelligence_score
+               FROM models ORDER BY name"""
+        ).fetchall()
+        models = []
+        counts: dict[str, int] = {}
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            display = compute_display_status(r[1], r[2], now=now)
+            counts[display] = counts.get(display, 0) + 1
+            models.append(
+                {
+                    "name": r[0],
+                    "current_status": r[1],
+                    "display_status": display,
+                    "last_checked_at": r[2],
+                    "last_success_at": r[3],
+                    "last_http_status": r[4],
+                    "last_error": r[5],
+                    "last_ttft_ms": r[6],
+                    "last_latency_ms": r[7],
+                    "last_decode_tps": r[8],
+                    "intelligence_score": r[9],
+                }
+            )
+        return {
+            "generated_at": utc_now(),
+            "stale_after_minutes": STALE_AFTER_MINUTES,
+            "counts": counts,
+            "models": models,
+        }
     finally:
         conn.close()

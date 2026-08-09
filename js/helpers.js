@@ -45,6 +45,8 @@ const state = {
   modelStats: {},
   charts: {},
   currentTab: 'overview',
+  modelMeta: {},
+  staleAfterMinutes: 180,
   explorerModel: '',
   compareModelA: '',
   compareModelB: '',

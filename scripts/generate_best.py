@@ -77,11 +77,17 @@ def compute_stats(runs, models_intel):
             r["timeToFirstToken"] for r in successes
             if r.get("timeToFirstToken") is not None and r["timeToFirstToken"] > 0
         ]
-        tps_arr = [
-            r["tokensGenerated"] / (r["responseTime"] / 1000)
-            for r in successes
-            if r["responseTime"] and r["responseTime"] > 0 and r["tokensGenerated"]
-        ]
+        tps_arr = []
+        for r in successes:
+            tok = r.get("tokensGenerated")
+            rt = r.get("responseTime")
+            ttft = r.get("timeToFirstToken")
+            if not tok or not rt or rt <= 0:
+                continue
+            gen_ms = rt - (ttft if ttft and ttft > 0 else 0)
+            if gen_ms <= 0:
+                gen_ms = rt
+            tps_arr.append(tok / (gen_ms / 1000))
 
         stats[model] = {
             "totalRuns": len(tested),

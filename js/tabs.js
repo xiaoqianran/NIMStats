@@ -329,6 +329,8 @@ function renderLbTable() {
   tbody.innerHTML = rows.map((r, i) => {
     const uptimePct = (r.uptime * 100).toFixed(1);
     const colorVar = r.uptime >= 0.7 ? 'var(--success)' : r.uptime >= 0.4 ? 'var(--warning)' : 'var(--danger)';
+    const dStatus = r.displayStatus || r.currentStatus || 'UNKNOWN';
+    const statusColor = dStatus === 'AVAILABLE' ? 'var(--success)' : dStatus === 'STALE' ? 'var(--warning)' : dStatus === 'GONE' ? 'var(--danger)' : 'var(--text-muted)';
     const scoreVar = r.score >= 60 ? 'var(--success)' : r.score >= 40 ? 'var(--warning)' : 'var(--danger)';
     const trendHtml = r.trend === 'up'
       ? `<span class="trend-indicator trend-up" title="Improving">↑</span>`
@@ -343,6 +345,7 @@ function renderLbTable() {
       <td><span class="rank-num${isTop3?' top3':''}">${r.rank}</span></td>
       <td><div class="model-name-cell">${providerChip(r.model, true)}<span class="model-name-text" title="${r.model}">${shortModel(r.model)}</span>${trendHtml}</div></td>
       <td><div class="score-cell"><span class="score-num" style="color:${scoreVar}">${r.score}</span></div></td>
+      <td><span style="font-size:10px;font-weight:700;color:${statusColor};font-family:'JetBrains Mono'">${dStatus}</span></td>
       <td><div class="uptime-cell"><span class="uptime-val" style="color:${colorVar}">${uptimePct}%</span><div class="uptime-bar"><div class="uptime-fill" style="width:${uptimePct}%;background:${colorVar}"></div></div></div></td>
       <td class="mono" style="font-weight:600;color:var(--blue)">${r.intelligence ? r.intelligence.toFixed(0) : '—'}</td>
       <td class="mono">${r.avgTime ? (r.avgTime/1000).toFixed(2)+'s' : '—'}</td>

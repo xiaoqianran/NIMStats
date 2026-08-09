@@ -253,6 +253,8 @@ async function init() {
     state.rawRuns = processed.runs; // chronological (oldest first)
     state.modelNames = processed.modelNames;
     state.modelIntel = data.modelIntel || {};
+    state.modelMeta = processed.modelMeta || data.modelMeta || {};
+    state.staleAfterMinutes = processed.staleAfterMinutes || 180;
 
     // Set initial limit and compute initial stats
     state.limit = '50';
@@ -270,9 +272,13 @@ async function init() {
     state.compareModelA = state.modelNames.includes(defaultA) ? defaultA : (sortedModels[0] || '');
     state.compareModelB = state.modelNames.includes(defaultB) ? defaultB : (sortedModels[1] || sortedModels[0] || '');
 
-    // Nav status
+    // Nav status — live availability from per-model latest check (not last run)
+    const stats = state.modelStats || {};
+    const avail = state.modelNames.filter(m => stats[m]?.displayStatus === 'AVAILABLE').length;
+    const stale = state.modelNames.filter(m => stats[m]?.displayStatus === 'STALE').length;
+    const gone = state.modelNames.filter(m => stats[m]?.displayStatus === 'GONE').length;
     document.getElementById('nav-status').textContent =
-      `${state.rawRuns.length} runs · ${state.modelNames.length} models`;
+      `${avail} live · ${stale} stale · ${gone} gone · ${state.rawRuns.length} batches · ${state.modelNames.length} models`;
 
     // Populate selects
     populateExplorerSelect();

@@ -35,6 +35,36 @@ NIMStats discovers models from NVIDIA `GET /v1/models`, filters to chat candidat
 
 ---
 
+
+## 🔄 Rolling monitor (current strategy)
+
+NIMStats is a **continuous rolling fleet monitor**, not an hourly full-fleet snapshot.
+
+| Piece | Behavior |
+|-------|----------|
+| Schedule | GitHub Actions every **10 minutes** (`*/10 * * * *`) |
+| Batch | Each run tests the next **9** chat models (cursor wraps) |
+| Catalog | `GET /v1/models` → filter embed/rerank/image/… → stable sorted fleet |
+| Requests | **No separate probe.** Health call sets availability; Throughput call measures TPS |
+| Health | `Reply with exactly: OK`, `temperature=0`, `max_tokens=8`, stream → TTFT |
+| Throughput | Fixed 1..40 number list, `temperature=0`, stream → e2e + decode TPS |
+| Rate limit | Client limiter **≤ 40 req/min** (`NIM_MAX_REQUESTS_PER_MINUTE`) |
+| Status | Per-model `current_status`, `last_checked_at`, `last_success_at` in `history.db` |
+| STALE | If not re-checked within `STALE_AFTER_MINUTES` (default 180), UI shows **STALE** |
+| Pages | Regenerates after **each batch** (not after full fleet cycle) |
+| Intelligence | Artificial Analysis only — not derived from our prompts |
+
+```bash
+# Local one batch
+export NIM_API_KEY=...
+python3 -u scripts/rolling_bench.py
+
+# Env knobs
+BATCH_SIZE=9
+NIM_MAX_REQUESTS_PER_MINUTE=40
+STALE_AFTER_MINUTES=180
+```
+
 ## ⚡ Quick Start
 
 > Get your own benchmarking dashboard running in under 5 minutes.
