@@ -68,3 +68,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run deploy-pages.yml --ref main
+
+      # Start the next full-fleet run immediately. The workflow concurrency
+      # group guarantees that benchmarks never overlap even if dispatch is fast.
+      - name: Start next benchmark immediately
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run benchmark.yml --ref main

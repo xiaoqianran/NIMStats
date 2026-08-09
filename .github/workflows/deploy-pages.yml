@@ -1,7 +1,7 @@
 name: Deploy GitHub Pages
 
-# Benchmark dispatches this workflow after publishing data. A successful deploy
-# immediately dispatches the next benchmark, forming one serialized loop.
+# Benchmark dispatches this workflow after publishing data. The benchmark loop
+# runs independently so GitHub Pages runner queues cannot delay the next test.
 on:
   push:
     branches: [main]
@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
   pages: write
   id-token: write
 
@@ -60,14 +59,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
-
-  continue-benchmark:
-    needs: deploy
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Start next benchmark immediately
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run benchmark.yml --repo "$GITHUB_REPOSITORY" --ref main
