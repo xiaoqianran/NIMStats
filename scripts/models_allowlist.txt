@@ -1,0 +1,2 @@
+# Force-include model ids even if filter would drop them (still need chat/completions support).
+# One id per line.

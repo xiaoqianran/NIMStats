@@ -4,14 +4,14 @@
 
 [![CI](https://github.com/MauroDruwel/NIMStats/actions/workflows/benchmark.yml/badge.svg)](https://github.com/MauroDruwel/NIMStats/actions)
 [![Live Dashboard](https://img.shields.io/badge/🌐%20live-nimstats.maurodruwel.be-76b900?style=flat-square)](https://nimstats.maurodruwel.be/)
-[![Models](https://img.shields.io/badge/models-22-blue?style=flat-square)](https://build.nvidia.com/models)
+[![Models](https://img.shields.io/badge/models-dynamic%20catalog-blue?style=flat-square)](https://build.nvidia.com/models)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow?style=flat-square)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/MauroDruwel/NIMStats/pulls)
 [![Stars](https://img.shields.io/github/stars/MauroDruwel/NIMStats?style=flat-square&color=gold)](https://github.com/MauroDruwel/NIMStats/stargazers)
 
 <br/>
 
-> **Community-driven benchmarking of 22 NVIDIA NIM models — fully automated, zero infra cost, self-hostable in minutes.**
+> **Community-driven benchmarking of NVIDIA NIM hosted models — dynamic `/v1/models` catalog, live availability probe, then bench only callable chat models.**
 
 <br/>
 
@@ -23,7 +23,7 @@
 
 ## ✨ What is NIMStats?
 
-NIMStats automatically benchmarks **22 NVIDIA NIM models** every hour using GitHub Actions and publishes the results to a beautiful, interactive dashboard. No servers, no subscriptions — just fork, add your API key, and go.
+NIMStats discovers models from NVIDIA `GET /v1/models`, filters to chat candidates (drops embed/rerank/image/…), **live-probes** which are actually callable for your API key (many catalog entries are retired/`404 Function not found for account`), then benchmarks only **AVAILABLE** models. Results publish to a static dashboard via GitHub Actions — no servers required.
 
 <div align="center">
 
@@ -199,30 +199,60 @@ PROMPT = "Your custom prompt here"
 </details>
 
 <details>
-<summary><b>Add or remove models</b></summary>
+<summary><b>Model catalog (auto from NVIDIA /v1/models)</b></summary>
 
-Use the model management script:
+Every benchmark run pulls `GET {API_BASE}/models`, caches to `scripts/models_cache.json`, and filters to **chat-compatible** models only (drops embeddings, rerank, image-gen, reward, OCR/parse, safety-only, etc.). If the pull fails, the last local cache is used.
+
 ```bash
-# List models in DB vs test_models.py
+# Refresh cache + show chat-eligible models
+python scripts/manage_models.py refresh
 python scripts/manage_models.py list
 
-# Add a new model to ALL_MODELS
-python scripts/manage_models.py add your/custom-model
+# Permanently skip a model
+python scripts/manage_models.py deny some-org/broken-model
 
-# Remove a model from ALL_MODELS and purge its data from history.db
-python scripts/manage_models.py remove your/custom-model
+# Force-include a model the filter would drop
+python scripts/manage_models.py allow some-org/special-model
 
-# Purge all DB models not in ALL_MODELS
+# Drop history.db rows for models not in the current chat set
 python scripts/manage_models.py purge
 ```
 
-Or manually edit `ALL_MODELS` in `scripts/test_models.py`:
-```python
-ALL_MODELS = [
-    "your/custom-model",
-    # ...
-]
+Env knobs:
+- `NIM_API_KEY` (required) — or put it in `.env`
+- `MODEL_LIMIT=20` — only test first N chat models (local smoke)
+- `STATIC_MODELS=a/b,c/d` — ignore catalog, use this fixed list
+- `SKIP_HISTORY=1` — do not write history.db
+- `models_denylist.txt` / `models_allowlist.txt` under `scripts/`
+</details>
+
+
+
+<details>
+<summary><b>Live availability probe (catalog ≠ callable)</b></summary>
+
+`/v1/models` is only a catalog. Many entries return `404 Function Not found for account` (retired / not entitled). NIMStats now:
+
+1. Pull + filter **chat candidates**
+2. **Probe** each with a tiny non-stream `/chat/completions`
+3. Full stream benchmark **only `AVAILABLE`** models (default)
+
+Statuses: `AVAILABLE` | `GONE` | `UNAUTHORIZED` | `RATE_LIMITED` | `TIMEOUT` | `ERROR`
+
+```bash
+# Probe only (fast fleet map)
+PROBE_ONLY=1 python scripts/test_models.py
+# or
+python scripts/manage_models.py probe
+
+# Skip probe (old behavior — not recommended)
+SKIP_PROBE=1 python scripts/test_models.py
+
+# Bench unavailable too
+BENCH_ONLY_AVAILABLE=0 python scripts/test_models.py
 ```
+
+Outputs: `scripts/availability_cache.json`, fleet snapshot in `results.json` summary.
 </details>
 
 <details>

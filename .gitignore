@@ -34,3 +34,8 @@ scripts/results*.json
 # Python
 __pycache__/
 *.pyc
+
+# Runtime model catalog / availability (regenerated each run)
+scripts/availability_cache.json
+scripts/models_cache_raw.json
+scripts/__pycache__/
