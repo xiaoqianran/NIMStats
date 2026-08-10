@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-08-10T12:46:33Z",
+  "fetched_at": "2026-08-10T12:53:24Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 100,
+  "count": 101,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -254,6 +254,14 @@
     },
     {
       "id": "meta/llama2-70b",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "meta",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
+      "id": "meta/muse-glimmer-30b",
       "object": "model",
       "created": 735790403,
       "owned_by": "meta",
