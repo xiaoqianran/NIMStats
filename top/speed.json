@@ -1,16 +1,16 @@
 {
-  "best_model": "google/diffusiongemma-26b-a4b-it",
-  "provider": "google",
-  "score": 93,
+  "best_model": "meta/llama-3.1-8b-instruct",
+  "provider": "meta",
+  "score": 62,
   "intelligence": null,
   "uptime": 100.0,
-  "avg_response_time_ms": 10441.504273504273,
-  "best_response_time_ms": 257,
-  "avg_time_to_first_token_ms": 10075.3,
-  "avg_throughput_tps": 662.0,
-  "total_runs": 117,
-  "success_count": 117,
-  "wins": 2,
-  "last_seen": "2026-08-10T05:49:15Z",
-  "generated_at": "2026-08-10T05:49:15Z"
+  "avg_response_time_ms": 542.4745762711865,
+  "best_response_time_ms": 253,
+  "avg_time_to_first_token_ms": 444.3,
+  "avg_throughput_tps": 169.0,
+  "total_runs": 118,
+  "success_count": 118,
+  "wins": 5,
+  "last_seen": "2026-08-10T05:56:21Z",
+  "generated_at": "2026-08-10T05:56:21Z"
 }
