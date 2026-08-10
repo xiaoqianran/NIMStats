@@ -3,17 +3,17 @@
   "provider": "nvidia",
   "metric": "latest_completion_tokens",
   "value": 32768,
-  "updated_at": "2026-08-10T03:54:18Z",
+  "updated_at": "2026-08-10T04:01:11Z",
   "completion_tokens": 32768,
   "total_tokens": 33300,
-  "response_time_ms": 182016,
-  "ttft_ms": 279,
-  "decode_tps": 180.3045,
-  "response_chars": 147392,
+  "response_time_ms": 233101,
+  "ttft_ms": 335,
+  "decode_tps": 140.7766,
+  "response_chars": 127585,
   "files_emitted": 0,
   "files_complete": 0,
   "output_complete": false,
   "truncated": true,
   "finish_reason": "length",
-  "generated_at": "2026-08-10T03:54:18Z"
+  "generated_at": "2026-08-10T04:01:11Z"
 }
