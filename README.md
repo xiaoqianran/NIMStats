@@ -42,12 +42,12 @@ GitHub Actions 默认连续运行：一轮 Benchmark 成功完成并提交数据
 | `NIM_API_KEY` | 可选。兼容旧的单密钥配置 |
 | `ARTIFICIAL_ANALYSIS_API_KEY` | 可选。更新外部 intelligence 分数 |
 
-每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 40 请求/分钟。400 个阶段任务会一次性进入线程池和 10 个限流队列，不等待同一模型的上一阶段返回；每把 Key 每 1.5 秒放行一次。这样慢响应只延迟结果回收，不会阻塞后续请求启动。100 个模型恰好产生 400 次推理调用；目录刷新另有 1 次请求，限流器会自动把超出首分钟容量的请求顺延。
+每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 **30 请求/分钟**。10 把 Key 通过 round-robin 均分请求，合计 **300 请求/分钟**。约 100 个模型 × 4 阶段 ≈ 400 次推理调用会进入线程池；每把 Key 约每 2 秒放行一次（= 30 RPM 的满速，不额外降速）。慢响应只延迟结果回收，不会阻塞其它请求启动。
 
 相关环境变量：
 
 ```text
-NIM_MAX_REQUESTS_PER_MINUTE=40
+NIM_MAX_REQUESTS_PER_MINUTE=30
 NIM_MAX_IN_FLIGHT=400
 BATCH_SIZE=0
 INCLUDE_ALL_CATALOG_MODELS=1
@@ -65,7 +65,13 @@ STALE_AFTER_MINUTES=180
 
 仓库的 Pages Source 必须设置为 **GitHub Actions**。
 
-部署只有一条正式路径：`.github/workflows/deploy-pages.yml`。基准 workflow 提交新数据后会显式 dispatch 该 workflow，因此部署运行使用的是新提交的准确 SHA，不依赖机器人 push 触发另一个 workflow。
+部署路径：`.github/workflows/deploy-pages.yml`。
+
+- 基准 workflow **每小时定时跑一次**（也可手动 `workflow_dispatch`），**不会**在结束后再自动链式启动下一次——避免 Actions 刷屏与 API 限流。
+- 基准成功结束后，由 `workflow_run` 自动触发 **一次** Pages 部署。
+- 静态资源（`index.html` / `css` / `js` 等）直接 push 到 `main` 也会触发部署。
+
+因此：**Pages 大约每小时部署 1 次**（与基准同频），不会每几分钟刷一次。
 
 构建脚本 `scripts/build_pages.py` 会：
 
@@ -77,6 +83,7 @@ STALE_AFTER_MINUTES=180
 公开端点：
 
 | 数据 | JSON | 纯文本 |
+
 |---|---|---|
 | 综合最佳 | [`/top/`](https://xiaoqianran.github.io/NIMStats/top/) | [`/top/model`](https://xiaoqianran.github.io/NIMStats/top/model) |
 | 速度最佳 | [`/top/speed`](https://xiaoqianran.github.io/NIMStats/top/speed) | [`/top/speed/model`](https://xiaoqianran.github.io/NIMStats/top/speed/model) |

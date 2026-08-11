@@ -12,9 +12,9 @@ from collections.abc import Callable
 class RateLimiter:
     """Sliding-window limiter: at most ``max_per_minute`` starts per 60s.
 
-    Requests are also evenly spaced.  Even spacing avoids a burst at the start
-    of a workflow and lets many worker threads keep slow requests in flight
-    without exceeding NVIDIA's per-key 40 RPM limit.
+    Requests are also evenly spaced at 60/max_per_minute so the full RPM budget
+    is used without bursting. With 10 keys at 30 RPM each this yields 300
+    aggregate starts/minute, round-robin across the key pool.
     """
 
     def __init__(
@@ -27,7 +27,7 @@ class RateLimiter:
         self.max_per_minute = int(
             max_per_minute
             if max_per_minute is not None
-            else os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "40")
+            else os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30")
         )
         if self.max_per_minute < 1:
             self.max_per_minute = 1

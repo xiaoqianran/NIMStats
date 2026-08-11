@@ -1,9 +1,7 @@
 name: Deploy GitHub Pages
 
-# Primary path: benchmark.yml dispatches this after publishing data so the
-# benchmark loop never waits on Pages runners.
-# Backup path: workflow_run catches successful Rolling NIM Benchmark completions
-# even when the explicit dispatch returns a transient API error (HTTP 5xx).
+# One deploy per successful Rolling NIM Benchmark (workflow_run), plus manual
+# dispatch and push of static assets. No tight loop with the benchmark job.
 on:
   push:
     branches: [main]
@@ -41,9 +39,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # workflow_run checkouts default to the workflow file's branch tip;
-          # for push/dispatch use the triggering SHA. For workflow_run, pin to
-          # the completed benchmark's head SHA so we deploy the data it just pushed.
+          # For workflow_run, pin to the completed benchmark head so we ship
+          # the data that run just pushed (not a later unrelated tip).
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Configure Pages

@@ -41,7 +41,11 @@ class ApiSlot:
 
 
 class ApiKeyPool:
-    """Assign requests round-robin; every key retains its own 40 RPM window."""
+    """Assign requests round-robin; every key keeps its own RPM window.
+
+    Default is 30 RPM per key. Ten keys → 300 aggregate requests/minute,
+    evenly spread because each acquire advances the round-robin cursor.
+    """
 
     def __init__(self, keys: list[str], max_per_minute: int | None = None) -> None:
         if not keys:

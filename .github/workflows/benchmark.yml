@@ -1,12 +1,13 @@
 name: Rolling NIM Benchmark
 
-# Full-fleet monitor. 100 models × 4 round-robin calls uses the 10-key 400 RPM pool.
+# Full-fleet monitor. ~100 models × 4 calls across a 10-key pool at 30 RPM/key
+# (300 requests/min total). Intentionally NOT self-chaining: continuous
+# workflow_dispatch loops burn Actions minutes and amplify GitHub API 5xx risk.
+# One run per schedule (or manual dispatch), then stop.
 on:
   workflow_dispatch:
-  # Dead-man switch: if the self-chain dies (e.g. transient GitHub API 500 on
-  # workflow_dispatch), hourly schedule restarts monitoring without a human.
-  # concurrency group below serializes this with any in-flight chained run.
   schedule:
+    # ~once per hour. concurrency group guarantees at most one run at a time.
     - cron: "17 * * * *"
 
 permissions:
@@ -15,7 +16,8 @@ permissions:
 
 concurrency:
   group: rolling-nim-benchmark
-  cancel-in-progress: false
+  # Never pile up a queue of chained/scheduled runs.
+  cancel-in-progress: true
 
 jobs:
   rolling:
@@ -32,7 +34,9 @@ jobs:
           NIM_API_KEYS: ${{ secrets.NIM_API_KEYS }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
           BATCH_SIZE: "0"
-          NIM_MAX_REQUESTS_PER_MINUTE: "40"
+          # Per-key ceiling. 10 keys × 30 RPM = 300 requests/minute total.
+          # Round-robin in ApiKeyPool spreads calls evenly across keys.
+          NIM_MAX_REQUESTS_PER_MINUTE: "30"
           NIM_MAX_IN_FLIGHT: "400"
           INCLUDE_ALL_CATALOG_MODELS: "1"
           REQUEST_TIMEOUT_SECONDS: "90"
@@ -69,44 +73,5 @@ jobs:
             echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Chain the next benchmark FIRST so a Pages dispatch outage can never
-      # stop the monitoring loop (this is what killed the chain on 2026-08-10:
-      # HTTP 500 from gh workflow run deploy-pages.yml aborted the job before
-      # "Start next benchmark" ran).
-      - name: Start next benchmark immediately
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            if gh workflow run benchmark.yml --ref main; then
-              echo "Queued next benchmark run"
-              exit 0
-            fi
-            echo "::warning::Benchmark dispatch attempt ${attempt} failed; retrying in $((attempt * 5))s"
-            sleep $((attempt * 5))
-          done
-          echo "::error::Unable to dispatch next benchmark after retries"
-          exit 1
-
-      # Bot pushes intentionally do not trigger push workflows. workflow_dispatch
-      # starts deploy-pages.yml at the newly pushed main SHA. Failures here must
-      # not fail the job (continue-on-error) — monitoring continuity > one deploy.
-      - name: Dispatch exact-commit Pages deploy
-        if: success() || failure()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -u
-          for attempt in 1 2 3 4 5; do
-            if gh workflow run deploy-pages.yml --ref main; then
-              echo "Queued Pages deploy"
-              exit 0
-            fi
-            echo "::warning::Deploy dispatch attempt ${attempt} failed; retrying in $((attempt * 5))s"
-            sleep $((attempt * 5))
-          done
-          echo "::warning::Unable to dispatch deploy-pages.yml after retries; Pages may be stale until next successful dispatch"
-          exit 1
+      # Pages deploy is triggered by deploy-pages.yml workflow_run on success.
+      # Do NOT self-dispatch another benchmark here — that was the runaway loop.

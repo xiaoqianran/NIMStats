@@ -5,9 +5,9 @@ Strategy:
   catalog → chat filter → stable sorted fleet → take next BATCH_SIZE models
   (0 means the whole fleet). Every catalog model receives exactly four calls:
   health, two controlled-throughput samples, and one natural-stop Next.js
-  generation workload. Requests run concurrently across a per-key 40
-  RPM pool. Writes history.db and advances the cursor; the workflow deploys
-  Pages after each completed run.
+  generation workload. Requests run concurrently across a per-key 30
+  RPM pool (10 keys → 300 RPM total, round-robin). Writes history.db;
+  GitHub Actions deploys Pages once after each scheduled run finishes.
 """
 
 from __future__ import annotations
@@ -599,9 +599,10 @@ def main() -> int:
     total_stage_tasks = len(stage_jobs)
     default_workers = total_stage_tasks
     max_workers = max(1, int(os.getenv("NIM_MAX_IN_FLIGHT", str(default_workers))))
+    per_key_rpm = int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30"))
     print(
-        f"Request pool: keys={key_pool.key_count} per_key_rpm="
-        f"{os.getenv('NIM_MAX_REQUESTS_PER_MINUTE', '40')} "
+        f"Request pool: keys={key_pool.key_count} per_key_rpm={per_key_rpm} "
+        f"total_rpm_budget={per_key_rpm * key_pool.key_count} "
         f"queued_stages={total_stage_tasks} workers={max_workers}",
         flush=True,
     )
@@ -686,7 +687,8 @@ def main() -> int:
         "throughputTargetTokens": THROUGHPUT_TARGET_TOKENS,
         "throughputMinValidTokens": THROUGHPUT_MIN_VALID_TOKENS,
         "catalog": catalog_meta,
-        "rateLimitRpm": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "40")),
+        "rateLimitRpm": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30")),
+        "totalRpmBudget": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30")) * key_pool.key_count,
         "apiKeyCount": key_pool.key_count,
         "requestCount": key_pool.request_count,
         "requestsPerModel": 4,
