@@ -1,13 +1,14 @@
 name: Rolling NIM Benchmark
 
-# Full-fleet monitor. ~100 models × 4 calls across a 10-key pool at 30 RPM/key
-# (300 requests/min total). Intentionally NOT self-chaining: continuous
-# workflow_dispatch loops burn Actions minutes and amplify GitHub API 5xx risk.
-# One run per schedule (or manual dispatch), then stop.
+# Full-fleet monitor. ~100 models × (1 health + 4 throughput + 1 long) per suite
+# round, across a 10-key pool at 30 RPM/key (300 req/min total).
+#
+# One scheduled Actions run per hour (no self-chaining). Inside that run we
+# repeat equal-coverage suite rounds until RUN_BUDGET_SECONDS is nearly spent,
+# so every model is retested the same number of times within the hour.
 on:
   workflow_dispatch:
   schedule:
-    # ~once per hour. concurrency group guarantees at most one run at a time.
     - cron: "17 * * * *"
 
 permissions:
@@ -16,33 +17,38 @@ permissions:
 
 concurrency:
   group: rolling-nim-benchmark
-  # Never pile up a queue of chained/scheduled runs.
   cancel-in-progress: true
 
 jobs:
   rolling:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Whole hour minus a little buffer for commit + Pages workflow_run.
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Full-fleet catalog + four-call benchmark suite
+      - name: Full-fleet multi-round benchmark suite
         env:
           NIM_API_KEYS: ${{ secrets.NIM_API_KEYS }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
           BATCH_SIZE: "0"
           # Per-key ceiling. 10 keys × 30 RPM = 300 requests/minute total.
-          # Round-robin in ApiKeyPool spreads calls evenly across keys.
           NIM_MAX_REQUESTS_PER_MINUTE: "30"
-          NIM_MAX_IN_FLIGHT: "400"
+          NIM_MAX_IN_FLIGHT: "600"
           INCLUDE_ALL_CATALOG_MODELS: "1"
           REQUEST_TIMEOUT_SECONDS: "90"
           STALE_AFTER_MINUTES: "180"
           HEALTH_MAX_TOKENS: "24"
           THROUGHPUT_MAX_TOKENS: "128"
+          # 4 throughput samples/model/round → better median + CV within each pass.
+          THROUGHPUT_SAMPLE_COUNT: "4"
+          # 0 = auto: keep launching equal suite rounds until budget is spent.
+          SUITE_ROUNDS: "0"
+          # ~50 minutes of probing inside the hourly job.
+          RUN_BUDGET_SECONDS: "3000"
           LONG_TASK_MAX_TOKENS: "3072"
           LONG_TASK_TIMEOUT_SECONDS: "300"
         run: python3 -u scripts/rolling_bench.py
@@ -74,4 +80,4 @@ jobs:
           fi
 
       # Pages deploy is triggered by deploy-pages.yml workflow_run on success.
-      # Do NOT self-dispatch another benchmark here — that was the runaway loop.
+      # Do NOT self-dispatch another benchmark here.

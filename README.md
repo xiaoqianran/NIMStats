@@ -11,14 +11,14 @@
 
 ## 当前版本做了什么
 
-GitHub Actions 默认连续运行：一轮 Benchmark 成功完成并提交数据后，会同时 dispatch 准确数据提交的 Pages 部署和下一轮 Benchmark。它不再使用固定 cron；Benchmark 的 concurrency 组保证两轮测试不会重叠，而 Pages 的 runner 排队也不会拖慢下一轮测试。若 Benchmark 失败，闭环会停下，可手动运行 `benchmark.yml` 恢复。
+GitHub Actions **每小时定时跑一轮**（也可手动触发），**不会**在结束后再自 dispatch 下一轮 Benchmark（避免 Actions 次数爆炸）。一次 job 内会在约 50 分钟预算里连续跑多轮「全舰队对等 suite」，每轮所有模型测同样次数，保证 1 小时内样本更均衡。成功提交数据后由 `workflow_run` 触发 **一次** Pages 部署。
 
 1. 在“10 把 Key 权限完全相同”的前提下，用一把轮询 Key 请求 NVIDIA `GET /v1/models`，并保留过去发现、后来下线的模型。
-2. 对目录中的每个模型固定调用 `/v1/chat/completions` **4 次**，不再做跨 Key 权限确认，也不靠模型名称猜测它是否可用。
-3. 400 次推理请求由全局轮询依次分给 10 把 Key；每把 Key 约 40 次，并由独立限流器保证不超过 40/min。
-4. 使用四次独立调用、互不混分的测试负载：
+2. 对目录中的每个模型固定调用 `/v1/chat/completions` **6 次/轮**（health×1 + 吞吐×4 + 长输出×1），不再做跨 Key 权限确认，也不靠模型名称猜测它是否可用。
+3. 约 100 模型 × 6 ≈ **600 次/轮** 的推理请求由全局轮询分给 10 把 Key；每把 Key 独立限流 **30/min**，合计 **300/min**。job 内会自动多轮，直到预算用尽。
+4. 使用独立、互不混分的测试负载：
    - **Health**：极短标记回复，判断聊天接口是否真的可请求，并测量 TTFT 与响应时间；
-   - **Throughput A/B**：两次固定目标 128 output tokens；只有 API 报告至少 116 tokens（90%）的样本才进入 TPS，取中位数并记录变异系数（CV）；
+   - **Throughput ×4**：四次固定目标 128 output tokens；只有 API 报告至少 116 tokens（90%）的样本才进入 TPS，取中位数并记录变异系数（CV）；
    - **Long Generation**：要求模型一次生成完整的 Next.js App Router 博客（6 个文件、25 项约束），自然停止或达到 3072 token 上限；保留原始回复并只记录 token、字符数、文件块、停止原因和是否截断等客观事实，不给内容质量打分。
 5. 更新 `history.db`、排行榜和公开静态端点，再部署到 GitHub Pages。
 
@@ -42,14 +42,17 @@ GitHub Actions 默认连续运行：一轮 Benchmark 成功完成并提交数据
 | `NIM_API_KEY` | 可选。兼容旧的单密钥配置 |
 | `ARTIFICIAL_ANALYSIS_API_KEY` | 可选。更新外部 intelligence 分数 |
 
-每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 **30 请求/分钟**。10 把 Key 通过 round-robin 均分请求，合计 **300 请求/分钟**。约 100 个模型 × 4 阶段 ≈ 400 次推理调用会进入线程池；每把 Key 约每 2 秒放行一次（= 30 RPM 的满速，不额外降速）。慢响应只延迟结果回收，不会阻塞其它请求启动。
+每把 NVIDIA 密钥都有独立的滑动窗口限流器，默认最多 **30 请求/分钟**。10 把 Key 通过 round-robin 均分请求，合计 **300 请求/分钟**。每轮约 100 模型 × 6 阶段 ≈ **600** 次推理进入线程池；每把 Key 约每 2 秒放行一次（= 30 RPM 满速）。小时 job 会在预算内自动重复多轮完整 suite，使每个模型在 1 小时内被同等次数覆盖。
 
 相关环境变量：
 
 ```text
 NIM_MAX_REQUESTS_PER_MINUTE=30
-NIM_MAX_IN_FLIGHT=400
+NIM_MAX_IN_FLIGHT=600
 BATCH_SIZE=0
+THROUGHPUT_SAMPLE_COUNT=4
+SUITE_ROUNDS=0
+RUN_BUDGET_SECONDS=3000
 INCLUDE_ALL_CATALOG_MODELS=1
 REQUEST_TIMEOUT_SECONDS=90
 HEALTH_MAX_TOKENS=24
@@ -59,7 +62,7 @@ LONG_TASK_TIMEOUT_SECONDS=300
 STALE_AFTER_MINUTES=180
 ```
 
-`BATCH_SIZE=0` 表示每次检查整个目录。若只想做本地小规模测试，可以设置正整数或使用 `MODEL_LIMIT`。
+`SUITE_ROUNDS=0` 表示按 `RUN_BUDGET_SECONDS` 自动决定轮数；`BATCH_SIZE=0` 表示每轮检查整个目录。若只想做本地小规模测试，可以设置正整数或使用 `MODEL_LIMIT`。
 
 ## GitHub Pages 部署
 
@@ -68,7 +71,7 @@ STALE_AFTER_MINUTES=180
 部署路径：`.github/workflows/deploy-pages.yml`。
 
 - 基准 workflow **每小时定时跑一次**（也可手动 `workflow_dispatch`），**不会**在结束后再自动链式启动下一次——避免 Actions 刷屏与 API 限流。
-- 基准成功结束后，由 `workflow_run` 自动触发 **一次** Pages 部署。
+- 一次 job 内多轮对等 suite 测完并提交后，由 `workflow_run` 自动触发 **一次** Pages 部署。
 - 静态资源（`index.html` / `css` / `js` 等）直接 push 到 `main` 也会触发部署。
 
 因此：**Pages 大约每小时部署 1 次**（与基准同频），不会每几分钟刷一次。

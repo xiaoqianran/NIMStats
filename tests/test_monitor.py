@@ -24,6 +24,7 @@ from rate_limiter import RateLimiter  # noqa: E402
 from rolling_bench import (  # noqa: E402
     build_stage_jobs,
     chat_completion,
+    get_stage_names,
     next_batch,
     run_model,
 )
@@ -67,14 +68,15 @@ class MonitorTests(unittest.TestCase):
             counts[index] += 1
         self.assertEqual(counts, [40] * 10)
 
-    def test_one_hundred_models_materialize_four_hundred_independent_jobs(self) -> None:
+    def test_stage_jobs_cover_every_model_equally(self) -> None:
         models = [f"org/model-{i}" for i in range(100)]
-        jobs = build_stage_jobs(models)
-        self.assertEqual(len(jobs), 400)
-        self.assertEqual({stage for _, stage in jobs}, {
-            "health", "throughput-a", "throughput-b", "long-generation",
-        })
-        self.assertTrue(all(sum(job[0] == model for job in jobs) == 4 for model in models))
+        stages = get_stage_names(4)  # health + 4 throughput + long = 6
+        jobs = build_stage_jobs(models, stages)
+        self.assertEqual(len(jobs), 600)
+        self.assertEqual({stage for _, stage in jobs}, set(stages))
+        self.assertTrue(
+            all(sum(job[0] == model for job in jobs) == len(stages) for model in models)
+        )
 
     def test_diffusiongemma_is_not_name_filtered(self) -> None:
         model = "google/diffusiongemma-26b-a4b-it"
@@ -154,7 +156,7 @@ class MonitorTests(unittest.TestCase):
         self.assertFalse(truncated["outputComplete"])
         self.assertTrue(truncated["truncated"])
 
-    def test_model_suite_always_makes_four_calls_and_aggregates_two_samples(self) -> None:
+    def test_model_suite_aggregates_configured_throughput_samples(self) -> None:
         long_response = "\n\n".join(
             f"<<<FILE:{path}>>>\n// complete {path}\n<<<END_FILE>>>"
             for path in LONG_TASK_EXPECTED_FILES
@@ -164,31 +166,34 @@ class MonitorTests(unittest.TestCase):
             "responseTime": 120, "timeToFirstToken": 60,
             "visibleResponseFull": "NIM_OK_7F3A", "apiKeyIndex": 0,
         }
-        throughput_a = {
+        throughput = {
             "success": True, "status": "AVAILABLE", "httpStatus": 200,
             "responseTime": 1100, "timeToFirstToken": 100,
             "tokensGenerated": 128, "totalTokens": 200,
             "visibleResponseFull": "a" * 512, "apiKeyIndex": 1,
         }
-        throughput_b = {
-            **throughput_a, "responseTime": 1200, "timeToFirstToken": 200,
-            "apiKeyIndex": 2,
-        }
-        long_generation = {
+        stages = get_stage_names(4)
+        side_effects = [health]
+        for i in range(4):
+            side_effects.append({
+                **throughput,
+                "responseTime": 1100 + i * 50,
+                "timeToFirstToken": 100 + i * 20,
+                "apiKeyIndex": i + 1,
+            })
+        side_effects.append({
             "success": True, "status": "AVAILABLE", "httpStatus": 200,
             "responseTime": 5000, "timeToFirstToken": 120,
             "tokensGenerated": 3072, "totalTokens": 3500,
             "visibleResponseFull": long_response, "finishReason": "stop",
-            "apiKeyIndex": 3,
-        }
-        with patch(
-            "rolling_bench.chat_completion",
-            side_effect=[health, throughput_a, throughput_b, long_generation],
-        ) as completion:
-            row = run_model("org/model", object())
-        self.assertEqual(completion.call_count, 4)
-        self.assertEqual(row["apiKeyIndexes"], [0, 1, 2, 3])
-        self.assertEqual(row["throughputSampleCount"], 2)
+            "apiKeyIndex": 5,
+        })
+        with patch("rolling_bench.chat_completion", side_effect=side_effects) as completion:
+            with patch("rolling_bench.STAGE_NAMES", stages):
+                row = run_model("org/model", object(), stage_names=stages)
+        self.assertEqual(completion.call_count, 6)
+        self.assertEqual(row["requestCount"], 6)
+        self.assertEqual(row["throughputSampleCount"], 4)
         self.assertEqual(row["longTokensGenerated"], 3072)
         self.assertEqual(row["longFilesComplete"], 6)
         self.assertTrue(row["longOutputComplete"])

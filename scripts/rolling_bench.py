@@ -3,11 +3,14 @@
 
 Strategy:
   catalog → chat filter → stable sorted fleet → take next BATCH_SIZE models
-  (0 means the whole fleet). Every catalog model receives exactly four calls:
-  health, two controlled-throughput samples, and one natural-stop Next.js
-  generation workload. Requests run concurrently across a per-key 30
-  RPM pool (10 keys → 300 RPM total, round-robin). Writes history.db;
-  GitHub Actions deploys Pages once after each scheduled run finishes.
+  (0 means the whole fleet). Every catalog model receives the same stage set:
+  health, N controlled-throughput samples, and one natural-stop long-generation
+  workload. Requests run concurrently across a per-key 30 RPM pool
+  (10 keys → 300 RPM total, round-robin).
+
+  A single hourly Actions job runs as many full-fleet suite rounds as fit in
+  RUN_BUDGET_SECONDS so every model is retested equally within the hour
+  (balanced coverage, no self-chaining workflows).
 """
 
 from __future__ import annotations
@@ -79,6 +82,12 @@ THROUGHPUT_MAX_TOKENS = int(
 )
 LONG_TASK_MAX_TOKENS = int(os.getenv("LONG_TASK_MAX_TOKENS", "3072"))
 LONG_TASK_TIMEOUT = int(os.getenv("LONG_TASK_TIMEOUT_SECONDS", "300"))
+# How many fixed-OSL throughput samples per model per suite round.
+THROUGHPUT_SAMPLE_COUNT = max(1, int(os.getenv("THROUGHPUT_SAMPLE_COUNT", "4")))
+# 0 = keep running suite rounds until RUN_BUDGET_SECONDS is nearly spent.
+SUITE_ROUNDS = max(0, int(os.getenv("SUITE_ROUNDS", "0")))
+# Leave headroom inside the hourly Actions job for commit / Pages.
+RUN_BUDGET_SECONDS = max(60, int(os.getenv("RUN_BUDGET_SECONDS", "3000")))
 
 
 def _load_dotenv() -> None:
@@ -363,7 +372,6 @@ def chat_completion(
 
 
 def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str], int, int, int]:
-    """Return (batch, cursor_start, cursor_end_exclusive_mod, new_cursor)."""
     n = len(fleet)
     if n == 0:
         return [], 0, 0, 0
@@ -376,12 +384,23 @@ def next_batch(fleet: list[str], cursor: int, batch_size: int) -> tuple[list[str
     return batch, start, (start + batch_size), new_cursor
 
 
-STAGE_NAMES = ("health", "throughput-a", "throughput-b", "long-generation")
+def get_stage_names(throughput_samples: int | None = None) -> tuple[str, ...]:
+    """Build the per-model stage list. Every model gets the exact same set."""
+    n = THROUGHPUT_SAMPLE_COUNT if throughput_samples is None else max(1, int(throughput_samples))
+    return ("health",) + tuple(f"throughput-{i + 1}" for i in range(n)) + ("long-generation",)
 
 
-def build_stage_jobs(models: list[str]) -> list[tuple[str, str]]:
+# Default stage list at import time (env-driven). Tests may monkeypatch this.
+STAGE_NAMES = get_stage_names()
+
+
+def build_stage_jobs(
+    models: list[str],
+    stage_names: tuple[str, ...] | None = None,
+) -> list[tuple[str, str]]:
     """Materialize every stage up front so response latency cannot gate starts."""
-    return [(model, stage) for model in models for stage in STAGE_NAMES]
+    names = stage_names or STAGE_NAMES
+    return [(model, stage) for model in models for stage in names]
 
 
 def run_stage(model: str, stage: str, key_pool: ApiKeyPool) -> dict[str, Any]:
@@ -394,7 +413,7 @@ def run_stage(model: str, stage: str, key_pool: ApiKeyPool) -> dict[str, Any]:
             stream=True,
             key_pool=key_pool,
         )
-    if stage in ("throughput-a", "throughput-b"):
+    if stage.startswith("throughput-"):
         return chat_completion(
             model=model,
             prompt=THROUGHPUT_PROMPT,
@@ -425,19 +444,26 @@ def run_model(
     model: str,
     key_pool: ApiKeyPool | None,
     stage_results: dict[str, dict[str, Any]] | None = None,
+    stage_names: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate four stages; local callers may execute them sequentially."""
+    """Aggregate health + N throughput samples + long-generation for one model."""
+    names = stage_names or STAGE_NAMES
     print(f"  [suite] {model}", flush=True)
     if stage_results is None:
         if key_pool is None:
             raise ValueError("key_pool is required when stage_results are not supplied")
         stage_results = {
             stage: run_stage(model, stage, key_pool)
-            for stage in STAGE_NAMES
+            for stage in names
         }
     health = stage_results["health"]
-    throughput_results = [stage_results["throughput-a"], stage_results["throughput-b"]]
+    throughput_results = [
+        stage_results[name]
+        for name in names
+        if name.startswith("throughput-") and name in stage_results
+    ]
     long_generation = stage_results["long-generation"]
+    calls_per_model = 1 + len(throughput_results) + 1
 
     all_results = [health, *throughput_results, long_generation]
     successful_calls = [result for result in all_results if result.get("success")]
@@ -541,14 +567,14 @@ def run_model(
         "longError": long_generation.get("error"),
         "longMaxTokens": LONG_TASK_MAX_TOKENS,
         **{f"long{key[0].upper()}{key[1:]}": value for key, value in long_diagnostics.items()},
-        "requestCount": 4,
+        "requestCount": calls_per_model,
         "apiKeyIndexes": [result["apiKeyIndex"] for result in all_results],
     }
     mark = "OK" if available else health["status"]
     print(
-        f"    → {model} {mark} calls=4 keys={row['apiKeyIndexes']} "
+        f"    → {model} {mark} calls={calls_per_model} keys={row['apiKeyIndexes']} "
         f"health={row.get('responseTime')}ms ttft={row.get('timeToFirstToken')} "
-        f"valid_samples={row.get('throughputSampleCount')}/2 "
+        f"valid_samples={row.get('throughputSampleCount')}/{len(throughput_results)} "
         f"tps={row.get('decodeTps')} cv={row.get('throughputCv')} "
         f"long={row.get('longTokensGenerated')}tok/{row.get('longResponseChars')}ch "
         f"files={row.get('longFilesComplete')}/6 finish={row.get('longFinishReason')} "
@@ -556,6 +582,85 @@ def run_model(
         flush=True,
     )
     return row
+
+
+def run_suite_round(
+    *,
+    fleet: list[str],
+    batch: list[str],
+    key_pool: ApiKeyPool,
+    stage_names: tuple[str, ...],
+    cursor_start: int,
+    cursor_end: int,
+    round_index: int,
+    max_workers: int,
+) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+    """One full equal-coverage pass over ``batch``; every model gets the same stages."""
+    stage_jobs = build_stage_jobs(batch, stage_names)
+    total_stage_tasks = len(stage_jobs)
+    print(
+        f"=== Suite round {round_index}: models={len(batch)} "
+        f"stages/model={len(stage_names)} jobs={total_stage_tasks} ===",
+        flush=True,
+    )
+    stage_results_by_model: dict[str, dict[str, dict[str, Any]]] = {
+        model: {} for model in batch
+    }
+    workers = min(max_workers, total_stage_tasks)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(run_stage, model, stage, key_pool): (model, stage)
+            for model, stage in stage_jobs
+        }
+        for future in as_completed(futures):
+            model, stage = futures[future]
+            try:
+                stage_results_by_model[model][stage] = future.result()
+            except Exception as exc:  # defensive: preserve the rest of the fleet run
+                print(
+                    f"  [internal-error] {model}/{stage}: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                stage_results_by_model[model][stage] = {
+                    "success": False,
+                    "status": STATUS_ERROR,
+                    "httpStatus": None,
+                    "responseTime": None,
+                    "timeToFirstToken": None,
+                    "tokensGenerated": None,
+                    "totalTokens": None,
+                    "error": f"Internal worker error: {type(exc).__name__}: {exc}",
+                    "apiKeyIndex": -1,
+                }
+
+    all_rows = [
+        run_model(model, None, stage_results_by_model[model], stage_names)
+        for model in batch
+    ]
+    all_rows.sort(key=lambda row: row["model"])
+
+    timestamp = utc_now()
+    run_id = write_rolling_batch(
+        timestamp=timestamp,
+        prompt=BENCHMARK_PROMPT,
+        models=all_rows,
+        batch_meta={
+            "batch_size": len(batch),
+            "cursor_start": cursor_start,
+            "cursor_end": cursor_end,
+            "kind": "suite-v4-longgen",
+            "benchmark_version": BENCHMARK_VERSION,
+            "suite_round": round_index,
+            "throughput_samples": sum(1 for s in stage_names if s.startswith("throughput-")),
+        },
+    )
+    meta = {
+        "timestamp": timestamp,
+        "runId": run_id,
+        "roundIndex": round_index,
+        "batchSize": len(batch),
+    }
+    return all_rows, run_id, meta
 
 
 def main() -> int:
@@ -586,94 +691,114 @@ def main() -> int:
     set_state(conn, "fleet_size", str(len(fleet)))
     set_state(conn, "fleet_json", json.dumps(fleet))
     conn.commit()
+    conn.close()
 
     batch, c_start, c_end, new_cursor = next_batch(fleet, cursor, BATCH_SIZE)
+    stage_names = get_stage_names()
+    calls_per_model = len(stage_names)
+    total_stage_tasks = len(batch) * calls_per_model
+    default_workers = total_stage_tasks
+    max_workers = max(1, int(os.getenv("NIM_MAX_IN_FLIGHT", str(default_workers))))
+    per_key_rpm = int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30"))
+    max_rounds = SUITE_ROUNDS if SUITE_ROUNDS > 0 else 10**9
+    deadline = time.monotonic() + RUN_BUDGET_SECONDS
+
+    print(
+        f"Rolling plan: fleet={len(fleet)} batch={len(batch)} "
+        f"stages/model={calls_per_model} ({', '.join(stage_names)}) "
+        f"max_rounds={'auto' if SUITE_ROUNDS <= 0 else SUITE_ROUNDS} "
+        f"budget_s={RUN_BUDGET_SECONDS}",
+        flush=True,
+    )
+    print(
+        f"Request pool: keys={key_pool.key_count} per_key_rpm={per_key_rpm} "
+        f"total_rpm_budget={per_key_rpm * key_pool.key_count} "
+        f"jobs/round={total_stage_tasks} workers={max_workers}",
+        flush=True,
+    )
     print(
         f"Rolling batch: cursor {c_start}→{new_cursor} "
         f"(size={len(batch)}/{len(fleet)}) models={batch}",
         flush=True,
     )
 
-    all_rows: list[dict[str, Any]] = []
-    stage_jobs = build_stage_jobs(batch)
-    total_stage_tasks = len(stage_jobs)
-    default_workers = total_stage_tasks
-    max_workers = max(1, int(os.getenv("NIM_MAX_IN_FLIGHT", str(default_workers))))
-    per_key_rpm = int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30"))
-    print(
-        f"Request pool: keys={key_pool.key_count} per_key_rpm={per_key_rpm} "
-        f"total_rpm_budget={per_key_rpm * key_pool.key_count} "
-        f"queued_stages={total_stage_tasks} workers={max_workers}",
-        flush=True,
-    )
-    stage_results_by_model: dict[str, dict[str, dict[str, Any]]] = {
-        model: {} for model in batch
-    }
-    with ThreadPoolExecutor(max_workers=min(max_workers, total_stage_tasks)) as executor:
-        futures = {
-            executor.submit(run_stage, model, stage, key_pool): (model, stage)
-            for model, stage in stage_jobs
-        }
-        for future in as_completed(futures):
-            model, stage = futures[future]
-            try:
-                stage_results_by_model[model][stage] = future.result()
-            except Exception as exc:  # defensive: preserve the rest of the fleet run
-                print(f"  [internal-error] {model}/{stage}: {type(exc).__name__}: {exc}", flush=True)
-                stage_results_by_model[model][stage] = {
-                    "success": False,
-                    "status": STATUS_ERROR,
-                    "httpStatus": None,
-                    "responseTime": None,
-                    "timeToFirstToken": None,
-                    "tokensGenerated": None,
-                    "totalTokens": None,
-                    "error": f"Internal worker error: {type(exc).__name__}: {exc}",
-                    "apiKeyIndex": -1,
-                }
+    rounds_done = 0
+    last_rows: list[dict[str, Any]] = []
+    run_ids: list[int] = []
+    last_pass_seconds = 0.0
+    job_started = time.monotonic()
 
-    for model in batch:
-        all_rows.append(run_model(model, None, stage_results_by_model[model]))
+    while rounds_done < max_rounds:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print("Budget exhausted — stopping suite rounds.", flush=True)
+            break
+        # After the first pass, require enough time for another full pass.
+        if rounds_done > 0 and last_pass_seconds > 0 and remaining < last_pass_seconds * 0.85:
+            print(
+                f"Remaining {remaining:.0f}s < 85% of last pass "
+                f"({last_pass_seconds:.0f}s) — stopping for balanced cut.",
+                flush=True,
+            )
+            break
+        # Always leave a little floor so we can persist + exit cleanly.
+        if rounds_done > 0 and remaining < 120:
+            print(f"Remaining {remaining:.0f}s < 120s floor — stopping.", flush=True)
+            break
 
-    # Stable persistence and JSON output regardless of completion order.
-    all_rows.sort(key=lambda row: row["model"])
+        pass_started = time.monotonic()
+        rows, run_id, _meta = run_suite_round(
+            fleet=fleet,
+            batch=batch,
+            key_pool=key_pool,
+            stage_names=stage_names,
+            cursor_start=c_start,
+            cursor_end=c_end,
+            round_index=rounds_done + 1,
+            max_workers=max_workers,
+        )
+        last_pass_seconds = time.monotonic() - pass_started
+        rounds_done += 1
+        last_rows = rows
+        run_ids.append(run_id)
+        print(
+            f"=== Suite round {rounds_done} complete in {last_pass_seconds:.1f}s "
+            f"(run_id={run_id}, remaining_budget="
+            f"{max(0.0, deadline - time.monotonic()):.0f}s) ===",
+            flush=True,
+        )
+
+    if rounds_done == 0:
+        print("No suite rounds completed", file=sys.stderr)
+        return 3
 
     timestamp = utc_now()
-    run_id = write_rolling_batch(
-        timestamp=timestamp,
-        prompt=BENCHMARK_PROMPT,
-        models=all_rows,
-        batch_meta={
-            "batch_size": len(batch),
-            "cursor_start": c_start,
-            "cursor_end": c_end,
-            "kind": "suite-v4-longgen",
-            "benchmark_version": BENCHMARK_VERSION,
-        },
-    )
-
     conn = sqlite3.connect(str(HISTORY_DB))
     init_schema(conn)
     set_state(conn, "cursor", str(new_cursor))
     set_state(conn, "last_batch_at", timestamp)
-    set_state(conn, "last_run_id", str(run_id))
+    set_state(conn, "last_run_id", str(run_ids[-1]))
     set_state(conn, "benchmark_version", BENCHMARK_VERSION)
     set_state(conn, "stale_after_minutes", str(STALE_AFTER_MINUTES))
+    set_state(conn, "suite_rounds_last_job", str(rounds_done))
     conn.commit()
     conn.close()
 
-    # Summaries
-    successful = [r for r in all_rows if r.get("success")]
+    # Summaries from the latest round (dashboard "current" view) + job totals.
+    successful = [r for r in last_rows if r.get("success")]
     valid_throughput = [r for r in successful if r.get("throughputValid")]
     completed_long_outputs = [r for r in successful if r.get("longOutputComplete")]
     by_status: dict[str, int] = {}
-    for r in all_rows:
+    for r in last_rows:
         st = r.get("status") or STATUS_ERROR
         by_status[st] = by_status.get(st, 0) + 1
 
+    elapsed = time.monotonic() - job_started
     summary = {
         "timestamp": timestamp,
-        "runId": run_id,
+        "runId": run_ids[-1],
+        "runIds": run_ids,
+        "suiteRounds": rounds_done,
         "batchSize": len(batch),
         "cursorStart": c_start,
         "cursorEnd": new_cursor,
@@ -686,30 +811,46 @@ def main() -> int:
         "benchmarkVersion": BENCHMARK_VERSION,
         "throughputTargetTokens": THROUGHPUT_TARGET_TOKENS,
         "throughputMinValidTokens": THROUGHPUT_MIN_VALID_TOKENS,
+        "throughputSampleCountConfigured": sum(
+            1 for s in stage_names if s.startswith("throughput-")
+        ),
         "catalog": catalog_meta,
-        "rateLimitRpm": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30")),
-        "totalRpmBudget": int(os.getenv("NIM_MAX_REQUESTS_PER_MINUTE", "30")) * key_pool.key_count,
+        "rateLimitRpm": per_key_rpm,
+        "totalRpmBudget": per_key_rpm * key_pool.key_count,
         "apiKeyCount": key_pool.key_count,
         "requestCount": key_pool.request_count,
-        "requestsPerModel": 4,
+        "requestsPerModelPerRound": calls_per_model,
+        "requestsPerModelThisJob": calls_per_model * rounds_done,
         "requestsByKey": {
-            str(index): sum(row.get("apiKeyIndexes", []).count(index) for row in all_rows)
+            str(index): sum(
+                row.get("apiKeyIndexes", []).count(index) for row in last_rows
+            )
             for index in range(key_pool.key_count)
         },
         "maxInFlight": max_workers,
+        "runBudgetSeconds": RUN_BUDGET_SECONDS,
+        "elapsedSeconds": round(elapsed, 1),
+        "stageNames": list(stage_names),
     }
     RESULTS_OUT.write_text(
-        json.dumps({"summary": summary, "models": all_rows}, indent=2),
+        json.dumps({"summary": summary, "models": last_rows}, indent=2),
         encoding="utf-8",
     )
     snap = export_fleet_snapshot()
     FLEET_OUT.write_text(json.dumps(snap, indent=2), encoding="utf-8")
 
     print()
-    print("=== Rolling batch complete ===")
+    print("=== Rolling job complete ===")
     print(json.dumps(summary, indent=2))
     print(f"Fleet snapshot counts: {snap.get('counts')}")
     print(f"history.db → {HISTORY_DB}")
+    print(
+        f"Balanced coverage: {rounds_done} equal suite round(s) × "
+        f"{len(batch)} models × {calls_per_model} calls/model "
+        f"= {rounds_done * len(batch) * calls_per_model} staged requests "
+        f"(plus catalog).",
+        flush=True,
+    )
     return 0
 
 
