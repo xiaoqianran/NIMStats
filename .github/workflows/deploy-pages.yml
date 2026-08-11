@@ -1,7 +1,9 @@
 name: Deploy GitHub Pages
 
-# Benchmark dispatches this workflow after publishing data. The benchmark loop
-# runs independently so GitHub Pages runner queues cannot delay the next test.
+# Primary path: benchmark.yml dispatches this after publishing data so the
+# benchmark loop never waits on Pages runners.
+# Backup path: workflow_run catches successful Rolling NIM Benchmark completions
+# even when the explicit dispatch returns a transient API error (HTTP 5xx).
 on:
   push:
     branches: [main]
@@ -17,6 +19,9 @@ on:
       - "_headers"
       - "_redirects"
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Rolling NIM Benchmark"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -29,10 +34,17 @@ concurrency:
 
 jobs:
   build:
+    # Skip failed / cancelled benchmark runs when triggered via workflow_run.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # workflow_run checkouts default to the workflow file's branch tip;
+          # for push/dispatch use the triggering SHA. For workflow_run, pin to
+          # the completed benchmark's head SHA so we deploy the data it just pushed.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
@@ -48,6 +60,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
