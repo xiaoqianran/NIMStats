@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-08-20T07:57:13Z",
+  "fetched_at": "2026-08-20T08:57:16Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 102,
+  "count": 103,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -350,6 +350,14 @@
     },
     {
       "id": "moonshotai/kimi-k2.6",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "moonshotai",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
+      "id": "moonshotai/kimi-k3",
       "object": "model",
       "created": 735790403,
       "owned_by": "moonshotai",
