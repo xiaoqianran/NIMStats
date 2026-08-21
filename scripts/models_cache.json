@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-21T08:58:40Z",
+  "fetched_at": "2026-08-21T09:53:10Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 103,
@@ -818,7 +818,7 @@
       "created": 735790403,
       "owned_by": "z-ai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "zyphra/zamba2-7b-instruct",
