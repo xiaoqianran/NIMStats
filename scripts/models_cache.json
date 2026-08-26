@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-26T07:59:53Z",
+  "fetched_at": "2026-08-26T09:03:02Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 103,
@@ -194,7 +194,7 @@
       "created": 735790403,
       "owned_by": "meta",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "meta/llama-3.1-8b-instruct",
@@ -202,7 +202,7 @@
       "created": 735790403,
       "owned_by": "meta",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "meta/llama-3.2-11b-vision-instruct",
@@ -218,7 +218,7 @@
       "created": 735790403,
       "owned_by": "meta",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "meta/llama-3.2-3b-instruct",
@@ -226,7 +226,7 @@
       "created": 735790403,
       "owned_by": "meta",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "meta/llama-3.2-90b-vision-instruct",
@@ -242,7 +242,7 @@
       "created": 735790403,
       "owned_by": "meta",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "meta/llama-guard-4-12b",
@@ -442,7 +442,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
@@ -450,7 +450,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
@@ -490,7 +490,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
@@ -498,7 +498,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/llama-nemotron-embed-1b-v2",
@@ -618,7 +618,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/nemotron-nano-12b-v2-vl",
@@ -626,7 +626,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/nemotron-nano-3-30b-a3b",
@@ -698,7 +698,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/riva-translate-4b-instruct",
