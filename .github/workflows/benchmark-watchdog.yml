@@ -1,0 +1,56 @@
+name: Benchmark Watchdog
+
+# GitHub scheduled events can be delayed or occasionally dropped. Keep the
+# primary hourly schedule in benchmark.yml, and use this independent watchdog
+# only to recover when no benchmark run has even been created for too long.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,37 * * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: benchmark-watchdog
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch benchmark only when scheduler is stale
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STALE_SECONDS: "5700"
+        run: |
+          set -euo pipefail
+
+          workflow="benchmark.yml"
+          now=$(date -u +%s)
+
+          active=$(gh api "repos/$GH_REPO/actions/workflows/$workflow/runs?per_page=20" \
+            --jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending")] | length')
+          if [ "$active" -gt 0 ]; then
+            echo "Benchmark already active; watchdog does nothing."
+            exit 0
+          fi
+
+          latest=$(gh api "repos/$GH_REPO/actions/workflows/$workflow/runs?per_page=1" \
+            --jq '.workflow_runs[0].created_at // empty')
+          if [ -z "$latest" ]; then
+            echo "No previous benchmark run found; dispatching recovery run."
+          else
+            latest_epoch=$(date -u -d "$latest" +%s)
+            age=$((now - latest_epoch))
+            echo "Latest benchmark run was created ${age}s ago."
+            if [ "$age" -lt "$STALE_SECONDS" ]; then
+              echo "Scheduler is fresh; watchdog does nothing."
+              exit 0
+            fi
+          fi
+
+          echo "No benchmark run created for at least ${STALE_SECONDS}s; dispatching recovery."
+          gh api -X POST "repos/$GH_REPO/actions/workflows/$workflow/dispatches" -f ref=main
