@@ -364,16 +364,3 @@ function processData(data) {
   const modelStats = buildModelStats(runs, modelNames, modelIntel, modelMeta);
   return { runs, modelNames, modelStats, modelMeta, staleAfterMinutes: data.staleAfterMinutes };
 }
-
-function recomputeStats() {
-  const limit = state.limit;
-  let runsSubset = [...state.rawRuns];
-  if (limit !== 'all') {
-    const n = parseInt(limit, 10);
-    runsSubset = state.rawRuns.slice(-n);
-  }
-  state.runs = runsSubset;
-  const modelNames = state.modelNames;
-  const modelMeta = state.modelMeta || {};
-  state.modelStats = buildModelStats(state.runs, modelNames, state.modelIntel || {}, modelMeta);
-}

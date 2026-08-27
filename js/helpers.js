@@ -1,116 +1,41 @@
-// ─── Constants ───────────────────────────────────────────────────────────────
 const PROVIDER_META = {
-  'deepseek-ai': { name: 'DeepSeek', color: '#4d9de0' },
-  'z-ai':        { name: 'Z-AI',     color: '#11a883' },
-  'minimaxai':   { name: 'MiniMax',  color: '#7c3aed' },
-  'nvidia':      { name: 'NVIDIA',   color: '#76b900' },
-  'moonshotai':  { name: 'Moonshot', color: '#0891b2' },
-  'openai':      { name: 'OpenAI',   color: '#2563eb' },
-  'google':      { name: 'Google',   color: '#ea4335' },
-  'qwen':        { name: 'Qwen',     color: '#d97706' },
-  'mistralai':   { name: 'Mistral',  color: '#7e22ce' },
-  'meta':        { name: 'Meta',     color: '#1877f2' },
+  'deepseek-ai': 'DeepSeek', 'z-ai': 'Z-AI', 'minimaxai': 'MiniMax', 'nvidia': 'NVIDIA',
+  'moonshotai': 'Moonshot', 'openai': 'OpenAI', 'google': 'Google', 'qwen': 'Qwen',
+  'mistralai': 'Mistral', 'meta': 'Meta'
 };
 
-const MODEL_PALETTE = [
-  '#76b900','#00c8ff','#ff6b35','#a855f7','#22c55e',
-  '#f59e0b','#ec4899','#06b6d4','#84cc16','#6366f1',
-  '#10b981','#3b82f6','#ef4444','#8b5cf6','#14b8a6',
-  '#eab308','#d946ef','#fb923c','#e11d48','#64748b'
-];
-
-const CHART_DEFAULTS = {
-  tooltip: {
-    backgroundColor: '#1a1a2e',
-    borderColor: '#2a2a40',
-    borderWidth: 1,
-    titleColor: '#e2e2f0',
-    bodyColor: '#8888aa',
-    padding: 12,
-    cornerRadius: 8,
-    displayColors: true
-  }
-};
-
-Chart.defaults.color = '#9aa0a6';
-Chart.defaults.borderColor = '#282a31';
-Chart.defaults.font.family = "'Outfit', sans-serif";
-
-// ─── State ────────────────────────────────────────────────────────────────────
 const state = {
-  db: null,
-  rawRuns: [],
-  runs: [],
-  modelNames: [],
-  modelStats: {},
-  charts: {},
-  currentTab: 'overview',
-  modelMeta: {},
-  staleAfterMinutes: 180,
-  explorerModel: '',
-  compareModelA: '',
-  compareModelB: '',
-  lbSort: { col: 'score', dir: 'desc' },
-  lbFilter: '',
-  discoverFilter: 'all',
-  discoverSearch: '',
-  timelineFilter: 'all',
-  limit: '50'
+  db: null, rawRuns: [], runs: [], modelNames: [], modelStats: {}, modelMeta: {}, modelIntel: {},
+  staleAfterMinutes: 180, currentView: 'overview', modelQuery: '', providerFilter: 'all',
+  statusFilter: 'all', modelSort: { key: 'score', dir: 'desc' }, selectedModels: [], runsLimit: '30'
 };
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function avg(arr) {
-  if (!arr.length) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
-}
-
-function fmtMs(ms) {
-  if (ms == null) return '—';
-  return (ms / 1000).toFixed(2) + 's';
-}
-
-function fmtTps(tps) {
-  if (tps == null || tps <= 0) return '—';
-  return tps.toFixed(1) + ' t/s';
-}
-
-function fmtPct(v) {
-  return (v * 100).toFixed(1) + '%';
-}
-
-function shortModel(m) {
-  return m.split('/')[1] || m;
-}
-
-function getProvider(m) {
-  return m.split('/')[0];
-}
-
-function providerMeta(m) {
-  const p = getProvider(m);
-  return PROVIDER_META[p] || { name: p, color: '#666688' };
-}
-
-function providerChip(m, small) {
-  const pm = providerMeta(m);
-  const s = small ? 'font-size:10px;padding:1px 6px' : 'font-size:11px;padding:2px 8px';
-  return `<span class="provider-chip" style="background:${pm.color}22;color:${pm.color};border:1px solid ${pm.color}44;${s}">${pm.name}</span>`;
-}
-
+function avg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0; }
+function shortModel(model) { return model?.split('/').slice(1).join('/') || model || '—'; }
+function getProvider(model) { return model?.split('/')[0] || 'unknown'; }
+function providerName(model) { const p = getProvider(model); return PROVIDER_META[p] || p; }
+function fmtMs(ms) { return ms == null ? '—' : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`; }
+function fmtTps(tps) { return tps == null || tps <= 0 ? '—' : `${tps.toFixed(1)} t/s`; }
+function fmtPct(v) { return v == null ? '—' : `${(v * 100).toFixed(1)}%`; }
+function fmtCv(v) { return v == null ? '—' : `${(v * 100).toFixed(1)}%`; }
 function fmtTimestamp(ts) {
-  const d = new Date(ts);
-  return d.toLocaleString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  if (!ts) return '—';
+  return new Intl.DateTimeFormat('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hour12:false }).format(new Date(ts));
 }
-
-function fmtTimestampShort(ts) {
-  const d = new Date(ts);
-  const mo = d.toLocaleString('en', { month: 'short' });
-  const day = d.getDate();
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${mo}${day} ${hh}:${mm}`;
+function relativeTime(ts) {
+  if (!ts) return '未知';
+  const delta = Date.now() - new Date(ts).getTime();
+  if (delta < 0) return '刚刚';
+  const m = Math.floor(delta / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
 }
-
+function escHtml(value) {
+  return String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
 function categorizeError(err) {
   if (!err) return 'Unknown';
   if (err.includes('timed out')) return 'Timeout';
@@ -120,51 +45,15 @@ function categorizeError(err) {
   if (err.includes('closed connection')) return 'Connection Closed';
   return 'Other Error';
 }
-
-function modelColor(model) {
-  const idx = state.modelNames.indexOf(model);
-  return MODEL_PALETTE[idx % MODEL_PALETTE.length];
+function statusLabel(status) { return ({ AVAILABLE:'可用', STALE:'过期', GONE:'离线', UNKNOWN:'未知' })[status] || status || '未知'; }
+function statusRank(status) { return ({ GONE:0, STALE:1, UNKNOWN:2, AVAILABLE:3 })[status] ?? 2; }
+function statusBadge(status) {
+  const normalized = ['AVAILABLE','STALE','GONE'].includes(status) ? status : 'UNKNOWN';
+  return `<span class="status-badge status-${normalized.toLowerCase()}"><span class="status-dot"></span>${statusLabel(normalized)}</span>`;
 }
-
-function sparklineSVG(values, width = 80, height = 24, color = '#76b900') {
-  const valid = values.filter(v => v !== null);
-  if (valid.length < 2) return `<svg width="${width}" height="${height}"></svg>`;
-  const min = Math.min(...valid), max = Math.max(...valid);
-  const range = max - min || 1;
-  const pts = [];
-  let lastX = 0, lastY = 0;
-  values.forEach((v, i) => {
-    if (v === null) return;
-    const x = (i / (values.length - 1)) * width;
-    const y = height - 2 - ((v - min) / range) * (height - 4);
-    pts.push([x, y]);
-    lastX = x; lastY = y;
-  });
-  if (pts.length < 2) return `<svg width="${width}" height="${height}"></svg>`;
-  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-  return `<svg width="${width}" height="${height}" style="overflow:visible"><path d="${d}" stroke="${color}" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.5" fill="${color}"/></svg>`;
-}
-
-function destroyChart(key) {
-  if (state.charts[key]) {
-    state.charts[key].destroy();
-    delete state.charts[key];
-  }
-}
-
-function animateCounter(el, target, duration = 1200, decimals = 0, suffix = '') {
-  const start = performance.now();
-  const update = (now) => {
-    const elapsed = now - start;
-    const progress = Math.min(elapsed / duration, 1);
-    const ease = 1 - Math.pow(1 - progress, 3);
-    const val = target * ease;
-    el.textContent = (decimals ? val.toFixed(decimals) : Math.round(val)) + suffix;
-    if (progress < 1) requestAnimationFrame(update);
-  };
-  requestAnimationFrame(update);
-}
-
-function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function metricMedian(values) {
+  const nums = values.filter(v => Number.isFinite(v)).sort((a,b) => a-b);
+  if (!nums.length) return null;
+  const mid = Math.floor(nums.length / 2);
+  return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
 }
