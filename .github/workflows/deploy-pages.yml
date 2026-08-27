@@ -39,9 +39,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          # For workflow_run, pin to the completed benchmark head so we ship
-          # the data that run just pushed (not a later unrelated tip).
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # benchmark.yml commits its results near the end of the run. The
+          # workflow_run head_sha is the SHA from when that benchmark started,
+          # so checking it out would redeploy stale data. Always build latest main.
+          ref: main
 
       - name: Configure Pages
         uses: actions/configure-pages@v6
