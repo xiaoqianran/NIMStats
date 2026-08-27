@@ -118,7 +118,7 @@ python3 scripts/manage_models.py allow some-org/model
 
 ## 数据说明
 
-`history.db` 是 Actions 侧的 SQLite 历史数据源。Pages 构建时会预聚合为轻量的 `data/site.json` 和按需加载的 `data/runs.json`，浏览器不再下载或扫描整库。每次运行的轻量长任务指标保存在历史结果中；体积较大的完整回复则在 `model_outputs` 中按模型覆盖，所以每个模型最多公开一份最新原文，不会在每个历史批次重复堆积。`scripts/models_cache.json` 保存模型目录并集；`scripts/fleet_snapshot.json` 是当前舰队状态快照。临时的 `scripts/results.json` 不提交。
+`history.db` 是 Actions 侧的 SQLite 历史数据源。Pages 构建时会预聚合为轻量静态 JSON；数据库本身不再进入 Pages artifact，浏览器不会下载或扫描整库。每次运行的轻量长任务指标保存在历史结果中；体积较大的完整回复则在 `model_outputs` 中按模型覆盖，所以每个模型最多公开一份最新原文，不会在每个历史批次重复堆积。`scripts/models_cache.json` 保存模型目录并集；`scripts/fleet_snapshot.json` 是当前舰队状态快照。临时的 `scripts/results.json` 不提交。
 
 历史趋势只保留每批恰好包含 100 个不同模型结果的完整测试；早期 2、4、9、76 模型的试运行数据已清除，避免不同样本规模污染成功率、趋势和排行榜。
 

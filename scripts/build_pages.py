@@ -11,7 +11,7 @@ from build_site_data import build_site_data
 from pathlib import Path
 
 
-ROOT_FILES = ("index.html", "favicon.svg", "history.db")
+ROOT_FILES = ("index.html", "favicon.svg")
 ROOT_DIRS = ("css", "js", "top")
 OPTIONAL_ROOT_FILES = ("_headers", "_redirects", "robots.txt")
 
