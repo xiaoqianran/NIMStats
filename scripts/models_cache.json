@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-08-26T19:19:45Z",
+  "fetched_at": "2026-08-26T23:33:11Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 103,
+  "count": 104,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -70,6 +70,14 @@
     },
     {
       "id": "deepseek-ai/deepseek-v4-flash-0731",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "deepseek-ai",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4-pro-0813",
       "object": "model",
       "created": 735790403,
       "owned_by": "deepseek-ai",

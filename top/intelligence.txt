@@ -1,1 +1,1 @@
-meta/llama-3.2-11b-vision-instruct
+deepseek-ai/deepseek-v4-pro-0813
