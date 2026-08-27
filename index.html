@@ -9,15 +9,13 @@
   <title>NIMStats</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
   <script defer src="js/helpers.js"></script>
-  <script defer src="js/data.js"></script>
   <script defer src="js/app.js"></script>
 </head>
 <body>
   <div id="loading" class="boot-screen" role="status" aria-live="polite">
     <div class="boot-mark" aria-hidden="true">N</div>
-    <div><strong>正在读取最新数据</strong><span>从 history.db 构建当前视图…</span></div>
+    <div><strong>正在读取最新数据</strong><span>加载最新的静态监测快照…</span></div>
   </div>
 
   <div id="app" class="app-shell" hidden>
@@ -38,7 +36,7 @@
 
     <main class="page-shell">
       <div id="error-state" class="error-state" hidden>
-        <div class="error-icon">!</div><h1>数据读取失败</h1><p id="error-msg">无法加载 history.db。</p>
+        <div class="error-icon">!</div><h1>数据读取失败</h1><p id="error-msg">无法加载页面数据。</p>
         <button class="button button-primary" type="button" onclick="location.reload()">重新加载</button>
       </div>
 
@@ -114,7 +112,7 @@
       <section id="view-runs" class="view" data-view-panel="runs" aria-labelledby="runs-title">
         <div class="page-heading">
           <div><p class="eyebrow">BENCHMARK HISTORY</p><h1 id="runs-title">运行记录</h1><p id="runs-summary" class="page-description">按时间查看每轮检测，不再把历史数据做成另一套仪表盘。</p></div>
-          <select id="runs-limit" class="select-control compact-select" aria-label="运行记录数量"><option value="30">最近 30 轮</option><option value="100">最近 100 轮</option><option value="all">全部</option></select>
+          <select id="runs-limit" class="select-control compact-select" aria-label="运行记录数量"><option value="30">最近 30 轮</option><option value="100">最近 100 轮</option></select>
         </div>
         <div id="runs-list" class="runs-list"></div>
       </section>

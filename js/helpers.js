@@ -5,9 +5,9 @@ const PROVIDER_META = {
 };
 
 const state = {
-  db: null, rawRuns: [], runs: [], modelNames: [], modelStats: {}, modelMeta: {}, modelIntel: {},
+  rawRuns: [], healthRuns: [], runsLoaded: false, totalRunCount: 0, modelNames: [], modelStats: {},
   staleAfterMinutes: 180, currentView: 'overview', modelQuery: '', providerFilter: 'all',
-  statusFilter: 'all', modelSort: { key: 'score', dir: 'desc' }, selectedModels: [], runsLimit: '30'
+  statusFilter: 'all', attentionOnly: false, modelSort: { key: 'score', dir: 'desc' }, selectedModels: [], runsLimit: '30'
 };
 
 function avg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0; }
@@ -45,6 +45,20 @@ function categorizeError(err) {
   if (err.includes('closed connection')) return 'Connection Closed';
   return 'Other Error';
 }
+
+function parseUtc(ts) {
+  if (!ts) return null;
+  const d = new Date(ts.endsWith('Z') ? ts : `${ts}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function displayStatus(currentStatus, lastCheckedAt, staleAfterMinutes = 180) {
+  const status = currentStatus || 'UNKNOWN';
+  const checked = parseUtc(lastCheckedAt);
+  if (!checked) return status === 'AVAILABLE' ? 'STALE' : status;
+  const ageMin = (Date.now() - checked.getTime()) / 60000;
+  return ageMin > staleAfterMinutes && status === 'AVAILABLE' ? 'STALE' : status;
+}
+
 function statusLabel(status) { return ({ AVAILABLE:'可用', STALE:'过期', GONE:'离线', UNKNOWN:'未知' })[status] || status || '未知'; }
 function statusRank(status) { return ({ GONE:0, STALE:1, UNKNOWN:2, AVAILABLE:3 })[status] ?? 2; }
 function statusBadge(status) {

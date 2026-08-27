@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import shutil
 import sqlite3
+
+from build_site_data import build_site_data
 from pathlib import Path
 
 
@@ -65,6 +67,10 @@ def build_site(source: Path, output: Path) -> list[str]:
         shutil.copy2(source / name, output / name)
     for name in ROOT_DIRS:
         shutil.copytree(source / name, output / name)
+
+    # Pre-aggregate SQLite into browser-sized JSON so the UI never needs
+    # sql.js/WASM or a full 30MB+ database scan on page load.
+    build_site_data(source / "history.db", output)
     for name in OPTIONAL_ROOT_FILES:
         path = source / name
         if path.is_file():

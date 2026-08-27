@@ -102,7 +102,7 @@ function renderAttention() {
 
 function renderHealthChart() {
   const target = document.getElementById('health-chart');
-  const runs = state.rawRuns.slice(-30);
+  const runs = state.healthRuns.slice(-30);
   const values = runs.map(run => run.summary.totalModels ? run.summary.successCount / run.summary.totalModels : null);
   const points = values.map((value, i) => value == null ? null : [i, value]).filter(Boolean);
   if (points.length < 2) {
@@ -276,11 +276,31 @@ function runDateLabel(ts) {
   return new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'long', day:'numeric', weekday:'short' }).format(new Date(ts));
 }
 
-function renderRuns() {
+async function ensureRunsLoaded() {
+  if (state.runsLoaded) return true;
+  const target = document.getElementById('runs-list');
+  target.innerHTML = '<div class="empty-state"><strong>正在读取运行记录</strong><span>只在需要时加载最近 100 轮明细…</span></div>';
+  try {
+    const response = await fetch('data/runs.json', { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`runs.json HTTP ${response.status}`);
+    const payload = await response.json();
+    state.rawRuns = payload.runs || [];
+    state.totalRunCount = payload.totalRunCount || state.totalRunCount || state.rawRuns.length;
+    state.runsLoaded = true;
+    return true;
+  } catch (err) {
+    console.error('Runs load failed', err);
+    target.innerHTML = `<div class="empty-state"><strong>运行记录读取失败</strong><span>${escHtml(err.message)}</span></div>`;
+    return false;
+  }
+}
+
+async function renderRuns() {
+  if (!state.runsLoaded && !(await ensureRunsLoaded())) return;
   const raw = state.rawRuns;
-  const limit = state.runsLimit === 'all' ? raw.length : Number(state.runsLimit);
+  const limit = Number(state.runsLimit);
   const runs = raw.slice(-limit).reverse();
-  document.getElementById('runs-summary').textContent = `共 ${raw.length} 轮历史记录 · 当前显示 ${runs.length} 轮`;
+  document.getElementById('runs-summary').textContent = `历史共 ${state.totalRunCount} 轮 · 当前提供最近 ${raw.length} 轮明细 · 显示 ${runs.length} 轮`;
   let dateKey = '';
   const html = [];
   runs.forEach(run => {
@@ -290,11 +310,10 @@ function renderRuns() {
     const success = run.summary.successCount || 0;
     const ratio = total ? success / total : 0;
     const time = new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(run.timestamp));
-    html.push(`<details class="run-card" data-run-id="${run._dbId}"><summary class="run-summary"><div class="run-time"><strong>${time}</strong><span>${relativeTime(run.timestamp)}</span></div><div class="run-health"><strong>${success} / ${total} 成功</strong><span>${(ratio*100).toFixed(1)}%</span><div class="run-bar"><span style="width:${Math.max(0,Math.min(100,ratio*100))}%"></span></div></div><div class="run-fastest">最快 <strong>${escHtml(shortModel(run.summary.fastestModel))}</strong>${run.summary.fastestTime ? ` · ${fmtMs(run.summary.fastestTime)}` : ''}</div><span class="run-kind">${escHtml(run.summary.kind || 'run')}</span><span class="run-chevron">›</span></summary><div class="run-details" data-run-details>展开后读取本轮模型明细…</div></details>`);
+    html.push(`<details class="run-card" data-run-id="${run._dbId}"><summary class="run-summary"><div class="run-time"><strong>${time}</strong><span>${relativeTime(run.timestamp)}</span></div><div class="run-health"><strong>${success} / ${total} 成功</strong><span>${(ratio*100).toFixed(1)}%</span><div class="run-bar"><span style="width:${Math.max(0,Math.min(100,ratio*100))}%"></span></div></div><div class="run-fastest">最快 <strong>${escHtml(shortModel(run.summary.fastestModel))}</strong>${run.summary.fastestTime ? ` · ${fmtMs(run.summary.fastestTime)}` : ''}</div><span class="run-kind">${escHtml(run.summary.kind || 'run')}</span><span class="run-chevron">›</span></summary><div class="run-details" data-run-details>展开后显示本轮模型明细</div></details>`);
   });
   document.getElementById('runs-list').innerHTML = html.join('');
 }
-
 function renderRunDetails(card) {
   const target = card.querySelector('[data-run-details]');
   if (!target || target.dataset.rendered) return;
@@ -313,7 +332,9 @@ function bindEvents() {
   document.querySelectorAll('[data-open-models]').forEach(button => button.addEventListener('click', () => {
     state.modelQuery = '';
     state.providerFilter = 'all';
-    state.statusFilter = button.dataset.openModels === 'attention' ? 'GONE' : 'all';
+    state.statusFilter = 'all';
+    state.attentionOnly = button.dataset.openModels === 'attention';
+    if (state.attentionOnly) state.modelSort = { key: 'status', dir: 'asc' };
     document.getElementById('model-search').value = '';
     document.getElementById('provider-filter').value = 'all';
     document.getElementById('status-filter').value = state.statusFilter;
@@ -324,7 +345,7 @@ function bindEvents() {
   document.getElementById('provider-filter').addEventListener('change', e => { state.providerFilter = e.target.value; renderModels(); });
   document.getElementById('status-filter').addEventListener('change', e => { state.statusFilter = e.target.value; renderModels(); });
   document.getElementById('clear-filters').addEventListener('click', () => {
-    state.modelQuery=''; state.providerFilter='all'; state.statusFilter='all';
+    state.modelQuery=''; state.providerFilter='all'; state.statusFilter='all'; state.attentionOnly=false;
     document.getElementById('model-search').value=''; document.getElementById('provider-filter').value='all'; document.getElementById('status-filter').value='all';
     renderModels();
   });
@@ -365,25 +386,23 @@ function bindEvents() {
 async function init() {
   initTheme();
   try {
-    const SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}` });
-    const response = await fetch(`history.db?t=${Date.now()}`, { cache:'no-store' });
-    if (!response.ok) throw new Error(`history.db HTTP ${response.status}`);
-    state.db = new SQL.Database(new Uint8Array(await response.arrayBuffer()));
-    const data = loadFromDb(state.db);
-    const processed = processData(data);
-    state.rawRuns = processed.runs;
-    state.runs = processed.runs;
-    state.modelNames = processed.modelNames;
-    state.modelStats = processed.modelStats;
-    state.modelMeta = processed.modelMeta;
-    state.modelIntel = data.modelIntel || {};
-    state.staleAfterMinutes = processed.staleAfterMinutes || 180;
+    const response = await fetch('data/site.json', { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`site.json HTTP ${response.status}`);
+    const data = await response.json();
+    state.modelNames = data.modelNames || [];
+    state.modelStats = data.modelStats || {};
+    state.healthRuns = data.healthRuns || [];
+    state.totalRunCount = data.totalRunCount || 0;
+    state.staleAfterMinutes = data.staleAfterMinutes || 180;
+    for (const model of state.modelNames) {
+      const stats = state.modelStats[model];
+      if (stats) stats.displayStatus = displayStatus(stats.currentStatus, stats.lastCheckedAt, state.staleAfterMinutes);
+    }
 
     populateProviderFilter();
     bindEvents();
     renderOverview();
     renderModels();
-    renderRuns();
     updateCompareBar();
     document.getElementById('loading').hidden = true;
     document.getElementById('app').hidden = false;
@@ -394,8 +413,7 @@ async function init() {
     document.getElementById('app').hidden = false;
     document.getElementById('error-state').hidden = false;
     document.querySelectorAll('.view').forEach(view => view.classList.remove('is-active'));
-    document.getElementById('error-msg').textContent = `无法读取数据：${err.message}`;
+    document.getElementById('error-msg').textContent = `无法读取页面数据：${err.message}`;
   }
 }
-
 init();
