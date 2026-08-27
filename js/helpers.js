@@ -5,7 +5,7 @@ const PROVIDER_META = {
 };
 
 const state = {
-  rawRuns: [], healthRuns: [], runsLoaded: false, totalRunCount: 0, modelNames: [], modelStats: {},
+  rawRuns: [], healthRuns: [], runsLoaded: false, runsMoreLoaded: false, totalRunCount: 0, outputsLoaded: false, outputs: {}, modelNames: [], modelStats: {},
   staleAfterMinutes: 180, currentView: 'overview', modelQuery: '', providerFilter: 'all',
   statusFilter: 'all', attentionOnly: false, modelSort: { key: 'score', dir: 'desc' }, selectedModels: [], runsLimit: '30'
 };

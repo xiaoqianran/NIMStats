@@ -44,7 +44,7 @@ def compact_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
-def build_site_data(db_path: Path, output: Path) -> tuple[Path, Path]:
+def build_site_data(db_path: Path, output: Path) -> tuple[Path, Path, Path, Path]:
     uri = f"file:{db_path.resolve()}?mode=ro&immutable=1"
     with sqlite3.connect(uri, uri=True) as conn:
         conn.row_factory = sqlite3.Row
@@ -58,6 +58,7 @@ def build_site_data(db_path: Path, output: Path) -> tuple[Path, Path]:
             pass
 
         model_meta: dict[str, dict] = {}
+        output_texts: dict[str, str] = {}
         for row in conn.execute(
             """SELECT id,name,intelligence_score,current_status,last_checked_at,last_success_at,
                       last_http_status,last_error,last_ttft_ms,last_latency_ms,last_decode_tps,
@@ -91,9 +92,10 @@ def build_site_data(db_path: Path, output: Path) -> tuple[Path, Path]:
                           o.output_complete,o.truncated,o.error_text
                    FROM model_outputs o JOIN models m ON o.model_id=m.id"""
             ):
+                output_texts[row["name"]] = row["response_text"] or ""
                 model_meta.setdefault(row["name"], {})["longOutput"] = {
                     "updatedAt": row["updated_at"], "benchmarkVersion": row["benchmark_version"],
-                    "responseText": row["response_text"] or "", "finishReason": row["finish_reason"],
+                    "hasResponseText": bool(row["response_text"]), "finishReason": row["finish_reason"],
                     "completionTokens": row["completion_tokens"], "totalTokens": row["total_tokens"],
                     "responseTimeMs": row["response_time_ms"], "ttftMs": row["ttft_ms"],
                     "decodeTps": row["decode_tps"], "charsPerSecond": row["chars_per_second"],
@@ -216,15 +218,17 @@ def build_site_data(db_path: Path, output: Path) -> tuple[Path, Path]:
             {"_dbId": r["_dbId"], "timestamp": r["timestamp"], "summary": r["summary"]}
             for r in ordered_runs[-HEALTH_RUN_LIMIT:]
         ]
-        recent_runs = []
-        for r in ordered_runs[-RECENT_RUN_LIMIT:]:
-            recent_runs.append({
+        def compact_run(r):
+            return {
                 "_dbId": r["_dbId"], "timestamp": r["timestamp"], "summary": r["summary"],
                 "models": [
                     {k: rec.get(k) for k in ("model", "success", "status", "responseTime", "timeToFirstToken", "decodeTps", "testKind")}
                     for rec in r["models"]
                 ],
-            })
+            }
+
+        recent_runs = [compact_run(r) for r in ordered_runs[-HEALTH_RUN_LIMIT:]]
+        older_runs = [compact_run(r) for r in ordered_runs[-RECENT_RUN_LIMIT:-HEALTH_RUN_LIMIT]]
 
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     site_payload = {
@@ -232,16 +236,21 @@ def build_site_data(db_path: Path, output: Path) -> tuple[Path, Path]:
         "modelStats": stats, "healthRuns": health_runs, "totalRunCount": len(run_rows),
     }
     runs_payload = {"generatedAt": generated_at, "totalRunCount": len(run_rows), "runs": recent_runs}
+    more_runs_payload = {"generatedAt": generated_at, "totalRunCount": len(run_rows), "runs": older_runs}
+    outputs_payload = {"generatedAt": generated_at, "outputs": output_texts}
     site_path = output / "data" / "site.json"
     runs_path = output / "data" / "runs.json"
+    more_runs_path = output / "data" / "runs-more.json"
+    outputs_path = output / "data" / "outputs.json"
     compact_json(site_path, site_payload)
     compact_json(runs_path, runs_payload)
-    return site_path, runs_path
+    compact_json(more_runs_path, more_runs_payload)
+    compact_json(outputs_path, outputs_payload)
+    return site_path, runs_path, more_runs_path, outputs_path
 
 
 if __name__ == "__main__":
     root = Path(__file__).resolve().parent.parent
     out = root / "_site"
-    site, runs = build_site_data(root / "history.db", out)
-    print(site)
-    print(runs)
+    for path in build_site_data(root / "history.db", out):
+        print(path)

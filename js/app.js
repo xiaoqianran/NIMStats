@@ -230,7 +230,7 @@ function openModelDrawer(model) {
       <section class="detail-section"><h3>响应时间趋势</h3><div class="spark">${lineSpark(s.responseTimes.slice(-30))}</div></section>
       ${s.lastError ? `<section class="detail-section"><h3>最近错误</h3><div class="detail-list"><div class="detail-row"><span>HTTP</span><span>${s.lastHttpStatus ?? '—'}</span></div><div class="detail-row"><span>错误类型</span><span>${escHtml(categorizeError(s.lastError))}</span></div></div></section>` : ''}
       ${errorEntries.length ? `<section class="detail-section"><h3>历史错误</h3><div class="detail-list">${errorEntries.slice(0,5).map(([name,count])=>`<div class="detail-row"><span>${escHtml(name)}</span><span>${count}</span></div>`).join('')}</div></section>` : ''}
-      ${output ? `<section class="detail-section"><h3>最新长输出</h3><div class="detail-list"><div class="detail-row"><span>Tokens</span><span>${output.completionTokens ?? '—'}</span></div><div class="detail-row"><span>完成状态</span><span>${output.outputComplete ? 'complete' : output.truncated ? 'truncated' : 'incomplete'}</span></div><div class="detail-row"><span>长任务吞吐</span><span>${fmtTps(output.decodeTps)}</span></div></div>${output.responseText ? `<details class="output-box"><summary>查看输出内容</summary><pre>${escHtml(output.responseText)}</pre></details>` : ''}</section>` : ''}
+      ${output ? `<section class="detail-section"><h3>最新长输出</h3><div class="detail-list"><div class="detail-row"><span>Tokens</span><span>${output.completionTokens ?? '—'}</span></div><div class="detail-row"><span>完成状态</span><span>${output.outputComplete ? 'complete' : output.truncated ? 'truncated' : 'incomplete'}</span></div><div class="detail-row"><span>长任务吞吐</span><span>${fmtTps(output.decodeTps)}</span></div></div>${output.hasResponseText ? `<details class="output-box" data-output-model="${escHtml(model)}"><summary>查看输出内容</summary><pre data-output-content>展开后加载输出内容…</pre></details>` : ''}</section>` : ''}
     </div>`;
   document.getElementById('drawer-backdrop').hidden = false;
   drawer.setAttribute('aria-hidden','false');
@@ -276,17 +276,26 @@ function runDateLabel(ts) {
   return new Intl.DateTimeFormat('zh-CN', { year:'numeric', month:'long', day:'numeric', weekday:'short' }).format(new Date(ts));
 }
 
-async function ensureRunsLoaded() {
-  if (state.runsLoaded) return true;
+async function ensureRunsLoaded(limit = 30) {
   const target = document.getElementById('runs-list');
-  target.innerHTML = '<div class="empty-state"><strong>正在读取运行记录</strong><span>只在需要时加载最近 100 轮明细…</span></div>';
   try {
-    const response = await fetch('data/runs.json', { cache: 'no-cache' });
-    if (!response.ok) throw new Error(`runs.json HTTP ${response.status}`);
-    const payload = await response.json();
-    state.rawRuns = payload.runs || [];
-    state.totalRunCount = payload.totalRunCount || state.totalRunCount || state.rawRuns.length;
-    state.runsLoaded = true;
+    if (!state.runsLoaded) {
+      target.innerHTML = '<div class="empty-state"><strong>正在读取运行记录</strong><span>加载最近 30 轮明细…</span></div>';
+      const response = await fetch('data/runs.json', { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`runs.json HTTP ${response.status}`);
+      const payload = await response.json();
+      state.rawRuns = payload.runs || [];
+      state.totalRunCount = payload.totalRunCount || state.totalRunCount || state.rawRuns.length;
+      state.runsLoaded = true;
+    }
+    if (limit > 30 && !state.runsMoreLoaded) {
+      target.innerHTML = '<div class="empty-state"><strong>正在扩展运行记录</strong><span>加载更早的 70 轮明细…</span></div>';
+      const response = await fetch('data/runs-more.json', { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`runs-more.json HTTP ${response.status}`);
+      const payload = await response.json();
+      state.rawRuns = [...(payload.runs || []), ...state.rawRuns];
+      state.runsMoreLoaded = true;
+    }
     return true;
   } catch (err) {
     console.error('Runs load failed', err);
@@ -295,10 +304,24 @@ async function ensureRunsLoaded() {
   }
 }
 
+async function ensureOutputsLoaded() {
+  if (state.outputsLoaded) return true;
+  try {
+    const response = await fetch('data/outputs.json', { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`outputs.json HTTP ${response.status}`);
+    const payload = await response.json();
+    state.outputs = payload.outputs || {};
+    state.outputsLoaded = true;
+    return true;
+  } catch (err) {
+    console.error('Output load failed', err);
+    return false;
+  }
+}
 async function renderRuns() {
-  if (!state.runsLoaded && !(await ensureRunsLoaded())) return;
-  const raw = state.rawRuns;
   const limit = Number(state.runsLimit);
+  if (!(await ensureRunsLoaded(limit))) return;
+  const raw = state.rawRuns;
   const runs = raw.slice(-limit).reverse();
   document.getElementById('runs-summary').textContent = `历史共 ${state.totalRunCount} 轮 · 当前提供最近 ${raw.length} 轮明细 · 显示 ${runs.length} 轮`;
   let dateKey = '';
@@ -367,6 +390,14 @@ function bindEvents() {
 
   document.getElementById('drawer-backdrop').addEventListener('click', closeModelDrawer);
   document.getElementById('model-drawer').addEventListener('click', e => { if (e.target.closest('[data-close-drawer]')) closeModelDrawer(); });
+  document.getElementById('model-drawer').addEventListener('toggle', async e => {
+    const box = e.target.closest?.('[data-output-model]');
+    if (!box?.open || box.dataset.loaded) return;
+    const content = box.querySelector('[data-output-content]');
+    if (!(await ensureOutputsLoaded())) { content.textContent = '输出内容读取失败。'; return; }
+    content.textContent = state.outputs[box.dataset.outputModel] || '暂无输出内容。';
+    box.dataset.loaded = '1';
+  }, true);
   document.getElementById('clear-compare').addEventListener('click', () => { state.selectedModels=[]; updateCompareBar(); renderModels(); });
   document.getElementById('open-compare').addEventListener('click', openCompareModal);
   document.getElementById('modal-backdrop').addEventListener('click', closeCompareModal);
