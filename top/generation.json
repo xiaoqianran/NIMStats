@@ -1,19 +1,19 @@
 {
-  "best_model": "deepseek-ai/deepseek-v4-pro-0813",
+  "best_model": "deepseek-ai/deepseek-v4-flash-0731",
   "provider": "deepseek-ai",
   "metric": "latest_completion_tokens",
   "value": 3072,
-  "updated_at": "2026-08-28T05:12:25Z",
+  "updated_at": "2026-08-28T06:15:35Z",
   "completion_tokens": 3072,
   "total_tokens": 3579,
-  "response_time_ms": 129006,
-  "ttft_ms": 91635,
-  "decode_tps": 82.2028,
-  "response_chars": 13722,
-  "files_emitted": 4,
-  "files_complete": 3,
+  "response_time_ms": 96054,
+  "ttft_ms": 5356,
+  "decode_tps": 33.8706,
+  "response_chars": 8481,
+  "files_emitted": 3,
+  "files_complete": 2,
   "output_complete": false,
   "truncated": true,
   "finish_reason": "length",
-  "generated_at": "2026-08-28T05:12:26Z"
+  "generated_at": "2026-08-28T06:15:37Z"
 }
