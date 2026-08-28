@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-08-28T05:24:50Z",
+  "fetched_at": "2026-08-28T16:54:47Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 104,
@@ -778,7 +778,7 @@
       "created": 735790403,
       "owned_by": "stepfun-ai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "thinkingmachines/inkling",
