@@ -1,16 +1,16 @@
 {
-  "best_model": "deepseek-ai/deepseek-v4-pro-0813",
-  "provider": "deepseek-ai",
+  "best_model": "meta/llama-3.2-11b-vision-instruct",
+  "provider": "meta",
   "score": 65,
   "intelligence": null,
-  "uptime": 100.0,
-  "avg_response_time_ms": 57956.28125,
-  "best_response_time_ms": 261,
-  "avg_time_to_first_token_ms": 42149.2,
-  "avg_throughput_tps": 30.9,
-  "total_runs": 64,
-  "success_count": 64,
-  "wins": 0,
-  "last_seen": "2026-08-29T02:59:49Z",
-  "generated_at": "2026-08-29T02:59:51Z"
+  "uptime": 99.0,
+  "avg_response_time_ms": 3019.399696816574,
+  "best_response_time_ms": 256,
+  "avg_time_to_first_token_ms": 2305.7,
+  "avg_throughput_tps": 33.6,
+  "total_runs": 2000,
+  "success_count": 1979,
+  "wins": 1,
+  "last_seen": "2026-08-29T08:38:57Z",
+  "generated_at": "2026-08-29T08:38:58Z"
 }
