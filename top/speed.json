@@ -1,16 +1,16 @@
 {
   "best_model": "google/diffusiongemma-26b-a4b-it",
   "provider": "google",
-  "score": 95,
+  "score": 96,
   "intelligence": null,
   "uptime": 98.2,
-  "avg_response_time_ms": 9342.255470737913,
+  "avg_response_time_ms": 9161.99134860051,
   "best_response_time_ms": 239,
-  "avg_time_to_first_token_ms": 9078.2,
-  "avg_throughput_tps": 708.2,
+  "avg_time_to_first_token_ms": 8897.9,
+  "avg_throughput_tps": 708.1,
   "total_runs": 2000,
   "success_count": 1965,
-  "wins": 22,
-  "last_seen": "2026-08-28T19:29:35Z",
-  "generated_at": "2026-08-28T19:29:35Z"
+  "wins": 23,
+  "last_seen": "2026-08-29T01:45:39Z",
+  "generated_at": "2026-08-29T01:45:40Z"
 }
