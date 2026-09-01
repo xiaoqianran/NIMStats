@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-01T05:08:24Z",
+  "fetched_at": "2026-09-01T10:06:44Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 104,
@@ -562,7 +562,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
