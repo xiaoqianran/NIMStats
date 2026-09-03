@@ -3,17 +3,17 @@
   "provider": "deepseek-ai",
   "metric": "latest_completion_tokens",
   "value": 3072,
-  "updated_at": "2026-09-03T10:40:40Z",
+  "updated_at": "2026-09-03T15:24:57Z",
   "completion_tokens": 3072,
   "total_tokens": 3579,
-  "response_time_ms": 91335,
-  "ttft_ms": 12939,
-  "decode_tps": 39.1857,
-  "response_chars": 12952,
+  "response_time_ms": 225139,
+  "ttft_ms": 23360,
+  "decode_tps": 15.2246,
+  "response_chars": 13022,
   "files_emitted": 0,
   "files_complete": 0,
   "output_complete": false,
   "truncated": true,
   "finish_reason": "length",
-  "generated_at": "2026-09-03T10:40:42Z"
+  "generated_at": "2026-09-03T15:24:58Z"
 }
