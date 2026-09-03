@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-03T04:38:12Z",
+  "fetched_at": "2026-09-03T09:51:01Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 104,
@@ -746,7 +746,7 @@
       "created": 735790403,
       "owned_by": "openai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "openai/gpt-oss-20b",
