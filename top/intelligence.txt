@@ -1,1 +1,1 @@
-google/diffusiongemma-26b-a4b-it
+meta/llama-3.2-11b-vision-instruct
