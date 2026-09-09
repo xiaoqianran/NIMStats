@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-09T06:38:47Z",
+  "fetched_at": "2026-09-09T09:45:50Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 104,
@@ -306,7 +306,7 @@
       "created": 735790403,
       "owned_by": "minimaxai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "mistralai/codestral-22b-instruct-v0.1",
