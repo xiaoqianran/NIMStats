@@ -1,16 +1,16 @@
 {
-  "best_model": "meta/muse-glimmer-30b",
-  "provider": "meta",
-  "score": 73,
+  "best_model": "google/diffusiongemma-26b-a4b-it",
+  "provider": "google",
+  "score": 96,
   "intelligence": null,
-  "uptime": 89.5,
-  "avg_response_time_ms": 3314.826353992183,
-  "best_response_time_ms": 210,
-  "avg_time_to_first_token_ms": 2377.9,
-  "avg_throughput_tps": 411.9,
+  "uptime": 98.1,
+  "avg_response_time_ms": 8511.69520897044,
+  "best_response_time_ms": 239,
+  "avg_time_to_first_token_ms": 8288.9,
+  "avg_throughput_tps": 837.8,
   "total_runs": 2000,
-  "success_count": 1791,
-  "wins": 85,
-  "last_seen": "2026-09-08T22:38:27Z",
-  "generated_at": "2026-09-08T22:38:28Z"
+  "success_count": 1962,
+  "wins": 49,
+  "last_seen": "2026-09-09T01:03:09Z",
+  "generated_at": "2026-09-09T01:03:10Z"
 }
