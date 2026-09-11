@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-09-11T18:33:43Z",
+  "fetched_at": "2026-09-11T21:44:40Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 104,
+  "count": 105,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -827,6 +827,14 @@
       "owned_by": "z-ai",
       "category": "chat",
       "catalog_active": false
+    },
+    {
+      "id": "z-ai/glm-5.3-flash",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "z-ai",
+      "category": "chat",
+      "catalog_active": true
     },
     {
       "id": "zyphra/zamba2-7b-instruct",
