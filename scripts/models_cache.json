@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-09-11T21:44:40Z",
+  "fetched_at": "2026-09-12T00:19:08Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 105,
+  "count": 106,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -646,6 +646,14 @@
     },
     {
       "id": "nvidia/nemotron-parse",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "nvidia",
+      "category": "parse_ocr",
+      "catalog_active": true
+    },
+    {
+      "id": "nvidia/nemotron-parse-2.0",
       "object": "model",
       "created": 735790403,
       "owned_by": "nvidia",
