@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-14T04:57:09Z",
+  "fetched_at": "2026-09-14T10:39:15Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 106,
@@ -82,7 +82,7 @@
       "created": 735790403,
       "owned_by": "deepseek-ai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "google/codegemma-1.1-7b",
