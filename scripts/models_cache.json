@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-09-15T19:01:03Z",
+  "fetched_at": "2026-09-15T21:16:13Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 106,
+  "count": 107,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -835,6 +835,14 @@
       "owned_by": "z-ai",
       "category": "chat",
       "catalog_active": false
+    },
+    {
+      "id": "z-ai/glm-5.3",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "z-ai",
+      "category": "chat",
+      "catalog_active": true
     },
     {
       "id": "z-ai/glm-5.3-flash",
