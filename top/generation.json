@@ -1,19 +1,19 @@
 {
-  "best_model": "google/diffusiongemma-26b-a4b-it",
+  "best_model": "google/gemma-4-31b-it",
   "provider": "google",
   "metric": "latest_completion_tokens",
   "value": 3072,
-  "updated_at": "2026-09-18T12:04:52Z",
+  "updated_at": "2026-09-18T15:45:37Z",
   "completion_tokens": 3072,
   "total_tokens": 3624,
-  "response_time_ms": 12398,
-  "ttft_ms": 3462,
-  "decode_tps": 343.778,
-  "response_chars": 11440,
+  "response_time_ms": 171883,
+  "ttft_ms": 26010,
+  "decode_tps": 21.0594,
+  "response_chars": 12187,
   "files_emitted": 5,
   "files_complete": 4,
   "output_complete": false,
   "truncated": true,
   "finish_reason": "length",
-  "generated_at": "2026-09-18T12:04:53Z"
+  "generated_at": "2026-09-18T15:45:38Z"
 }
