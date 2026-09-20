@@ -1,19 +1,19 @@
 {
-  "best_model": "google/diffusiongemma-26b-a4b-it",
-  "provider": "google",
+  "best_model": "deepseek-ai/deepseek-v4-flash-0731",
+  "provider": "deepseek-ai",
   "metric": "latest_completion_tokens",
   "value": 3072,
-  "updated_at": "2026-09-20T01:59:17Z",
+  "updated_at": "2026-09-20T06:07:53Z",
   "completion_tokens": 3072,
-  "total_tokens": 3624,
-  "response_time_ms": 10940,
-  "ttft_ms": 1471,
-  "decode_tps": 324.4271,
-  "response_chars": 11641,
+  "total_tokens": 3579,
+  "response_time_ms": 240926,
+  "ttft_ms": 121948,
+  "decode_tps": 25.8199,
+  "response_chars": 10515,
   "files_emitted": 5,
   "files_complete": 4,
   "output_complete": false,
   "truncated": true,
   "finish_reason": "length",
-  "generated_at": "2026-09-20T01:59:18Z"
+  "generated_at": "2026-09-20T06:07:54Z"
 }
