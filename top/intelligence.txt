@@ -1,1 +1,1 @@
-deepseek-ai/deepseek-v4.1-flash
+meta/llama-3.2-11b-vision-instruct
