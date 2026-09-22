@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-09-21T21:05:29Z",
+  "fetched_at": "2026-09-21T23:14:19Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 107,
+  "count": 108,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -83,6 +83,14 @@
       "owned_by": "deepseek-ai",
       "category": "chat",
       "catalog_active": false
+    },
+    {
+      "id": "deepseek-ai/deepseek-v4.1-flash",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "deepseek-ai",
+      "category": "chat",
+      "catalog_active": true
     },
     {
       "id": "google/codegemma-1.1-7b",
