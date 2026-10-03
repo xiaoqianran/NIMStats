@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-03T17:17:12Z",
+  "fetched_at": "2026-10-03T19:59:34Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 108,
@@ -586,7 +586,7 @@
       "created": 735790403,
       "owned_by": "nvidia",
       "category": "chat",
-      "catalog_active": false
+      "catalog_active": true
     },
     {
       "id": "nvidia/nemotron-3-ultra-550b-a55b",
