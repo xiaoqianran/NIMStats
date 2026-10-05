@@ -3,17 +3,17 @@
   "provider": "google",
   "metric": "latest_completion_tokens",
   "value": 3072,
-  "updated_at": "2026-10-05T02:52:52Z",
+  "updated_at": "2026-10-05T07:45:35Z",
   "completion_tokens": 3072,
   "total_tokens": 3624,
-  "response_time_ms": 8235,
-  "ttft_ms": 1161,
-  "decode_tps": 434.2663,
-  "response_chars": 11284,
+  "response_time_ms": 7208,
+  "ttft_ms": 1092,
+  "decode_tps": 502.2891,
+  "response_chars": 11602,
   "files_emitted": 5,
   "files_complete": 4,
   "output_complete": false,
   "truncated": true,
   "finish_reason": "length",
-  "generated_at": "2026-10-05T02:52:54Z"
+  "generated_at": "2026-10-05T07:45:36Z"
 }
