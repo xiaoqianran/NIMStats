@@ -60,6 +60,13 @@ class MonitorTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(load_api_keys(), ["key-a", "key-b", "key-c"])
 
+    def test_timed_acquire_preserves_key_selection(self) -> None:
+        pool = ApiKeyPool(["key-a", "key-b"], max_per_minute=1000)
+        index, key, waited = pool.acquire_with_timing()
+        self.assertEqual((index, key), (0, "key-a"))
+        self.assertGreaterEqual(waited, 0)
+        self.assertEqual(pool.request_count, 1)
+
     def test_four_hundred_calls_are_evenly_distributed_across_ten_keys(self) -> None:
         pool = ApiKeyPool([f"key-{i}" for i in range(10)], max_per_minute=1_000_000)
         counts = [0] * 10
