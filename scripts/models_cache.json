@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-10-09T00:17:59Z",
+  "fetched_at": "2026-10-28T05:13:25Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 108,
+  "count": 114,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -317,6 +317,14 @@
       "catalog_active": false
     },
     {
+      "id": "minimaxai/minimax-m3.1-flash",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "minimaxai",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
       "id": "mistralai/codestral-22b-instruct-v0.1",
       "object": "model",
       "created": 735790403,
@@ -378,7 +386,7 @@
       "created": 735790403,
       "owned_by": "moonshotai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "nv-mistralai/mistral-nemo-12b-instruct",
@@ -597,6 +605,14 @@
       "catalog_active": true
     },
     {
+      "id": "nvidia/nemotron-3.5-bolt-e4b",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "nvidia",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
       "id": "nvidia/nemotron-3.5-content-safety",
       "object": "model",
       "created": 735790403,
@@ -605,7 +621,31 @@
       "catalog_active": true
     },
     {
+      "id": "nvidia/nemotron-3.5-embed-1b",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "nvidia",
+      "category": "embedding",
+      "catalog_active": true
+    },
+    {
+      "id": "nvidia/nemotron-3.5-embed-8b",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "nvidia",
+      "category": "embedding",
+      "catalog_active": true
+    },
+    {
       "id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "nvidia",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
+      "id": "nvidia/nemotron-3.5-super-vl-120b-a12b",
       "object": "model",
       "created": 735790403,
       "owned_by": "nvidia",
@@ -795,6 +835,14 @@
       "owned_by": "stepfun-ai",
       "category": "chat",
       "catalog_active": false
+    },
+    {
+      "id": "stepfun-ai/step-5-preview",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "stepfun-ai",
+      "category": "chat",
+      "catalog_active": true
     },
     {
       "id": "thinkingmachines/inkling",
