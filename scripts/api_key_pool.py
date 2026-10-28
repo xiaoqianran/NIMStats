@@ -87,6 +87,16 @@ class ApiKeyPool:
         slot.limiter.wait()
         return index, slot.key
 
+    def acquire_with_timing(
+        self, preferred_indexes: list[int] | None = None
+    ) -> tuple[int, str, float]:
+        """Acquire a key and return the elapsed limiter wait in seconds."""
+        import time
+
+        started = time.perf_counter()
+        index, key = self.acquire_with_index(preferred_indexes)
+        return index, key, time.perf_counter() - started
+
     def acquire(self, preferred_indexes: list[int] | None = None) -> str:
         """Return a rate-limited key. The key value must never be logged."""
         return self.acquire_with_index(preferred_indexes)[1]
