@@ -186,7 +186,7 @@ def chat_completion(
     timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     """One API call using a rate-limited key from the shared pool."""
-    api_key_index, api_key = key_pool.acquire_with_index(preferred_key_indexes)
+    api_key_index, api_key, rate_limit_wait = key_pool.acquire_with_timing(preferred_key_indexes)
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -210,6 +210,7 @@ def chat_completion(
     )
     timeout = timeout_seconds or REQUEST_TIMEOUT
     started = time.perf_counter()
+    rate_limit_wait_ms = round(rate_limit_wait * 1000, 2)
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     ttft_ms: int | None = None
@@ -282,7 +283,8 @@ def chat_completion(
                     "responseFull": content or None,
                     "visibleResponseFull": visible_content or None,
                     "finishReason": finish_reason,
-                    "apiKeyIndex": api_key_index,
+                    "rateLimitWaitMs": rate_limit_wait_ms,
+            "apiKeyIndex": api_key_index,
                     "error": None if ok else "No content in stream response",
                 }
             # non-stream
@@ -318,7 +320,8 @@ def chat_completion(
                 "responseFull": str(content) if content else None,
                 "visibleResponseFull": str(content) if content else None,
                 "finishReason": finish_reason,
-                "apiKeyIndex": api_key_index,
+                "rateLimitWaitMs": rate_limit_wait_ms,
+            "apiKeyIndex": api_key_index,
                 "error": None if ok else "Empty response",
             }
     except urllib.error.HTTPError as exc:
@@ -337,6 +340,7 @@ def chat_completion(
             "totalTokens": None,
             "response": None,
             "error": msg,
+            "rateLimitWaitMs": rate_limit_wait_ms,
             "apiKeyIndex": api_key_index,
         }
     except Exception as exc:  # noqa: BLE001
@@ -367,6 +371,7 @@ def chat_completion(
             "visibleResponseFull": visible_content or None,
             "finishReason": finish_reason,
             "error": f"{type(exc).__name__}: {exc}",
+            "rateLimitWaitMs": rate_limit_wait_ms,
             "apiKeyIndex": api_key_index,
         }
 
@@ -569,6 +574,7 @@ def run_model(
         **{f"long{key[0].upper()}{key[1:]}": value for key, value in long_diagnostics.items()},
         "requestCount": calls_per_model,
         "apiKeyIndexes": [result["apiKeyIndex"] for result in all_results],
+        "rateLimitWaitMs": [result.get("rateLimitWaitMs") for result in all_results],
     }
     mark = "OK" if available else health["status"]
     print(
