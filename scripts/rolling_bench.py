@@ -284,7 +284,7 @@ def chat_completion(
                     "visibleResponseFull": visible_content or None,
                     "finishReason": finish_reason,
                     "rateLimitWaitMs": rate_limit_wait_ms,
-            "apiKeyIndex": api_key_index,
+                    "apiKeyIndex": api_key_index,
                     "error": None if ok else "No content in stream response",
                 }
             # non-stream
@@ -321,7 +321,7 @@ def chat_completion(
                 "visibleResponseFull": str(content) if content else None,
                 "finishReason": finish_reason,
                 "rateLimitWaitMs": rate_limit_wait_ms,
-            "apiKeyIndex": api_key_index,
+                "apiKeyIndex": api_key_index,
                 "error": None if ok else "Empty response",
             }
     except urllib.error.HTTPError as exc:
