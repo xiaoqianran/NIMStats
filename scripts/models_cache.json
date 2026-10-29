@@ -1,8 +1,8 @@
 {
-  "fetched_at": "2026-10-29T07:04:08Z",
+  "fetched_at": "2026-10-29T14:15:47Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
-  "count": 114,
+  "count": 115,
   "models": [
     {
       "id": "01-ai/yi-large",
@@ -350,6 +350,14 @@
     },
     {
       "id": "mistralai/mistral-large-2-instruct",
+      "object": "model",
+      "created": 735790403,
+      "owned_by": "mistralai",
+      "category": "chat",
+      "catalog_active": true
+    },
+    {
+      "id": "mistralai/mistral-large-4-1t-a52b",
       "object": "model",
       "created": 735790403,
       "owned_by": "mistralai",
