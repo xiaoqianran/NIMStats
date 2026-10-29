@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-10-28T05:13:25Z",
+  "fetched_at": "2026-10-29T07:04:08Z",
   "source": "remote",
   "api_base": "https://integrate.api.nvidia.com/v1",
   "count": 114,
@@ -898,7 +898,7 @@
       "created": 735790403,
       "owned_by": "z-ai",
       "category": "chat",
-      "catalog_active": true
+      "catalog_active": false
     },
     {
       "id": "z-ai/glm-5.3-flash",
