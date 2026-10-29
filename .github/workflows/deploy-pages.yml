@@ -17,9 +17,6 @@ on:
       - "_headers"
       - "_redirects"
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Rolling NIM Benchmark"]
-    types: [completed]
 
 permissions:
   contents: read
@@ -32,8 +29,6 @@ concurrency:
 
 jobs:
   build:
-    # Skip failed / cancelled benchmark runs when triggered via workflow_run.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,7 +53,6 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
