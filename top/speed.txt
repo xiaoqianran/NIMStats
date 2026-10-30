@@ -1,1 +1,1 @@
-nvidia/nemotron-parse-2.0
+google/diffusiongemma-26b-a4b-it
