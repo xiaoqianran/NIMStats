@@ -1,16 +1,16 @@
 {
   "best_model": "nvidia/nemotron-parse-2.0",
   "provider": "nvidia",
-  "score": 86,
+  "score": 87,
   "intelligence": null,
   "uptime": 98.4,
-  "avg_response_time_ms": 504.57624831309045,
+  "avg_response_time_ms": 504.1974479516454,
   "best_response_time_ms": 286,
-  "avg_time_to_first_token_ms": 234.7,
-  "avg_throughput_tps": 521.1,
-  "total_runs": 1506,
-  "success_count": 1482,
+  "avg_time_to_first_token_ms": 234.8,
+  "avg_throughput_tps": 521.4,
+  "total_runs": 1513,
+  "success_count": 1489,
   "wins": 36,
-  "last_seen": "2026-10-31T20:48:46Z",
-  "generated_at": "2026-10-31T20:48:47Z"
+  "last_seen": "2026-11-01T00:08:32Z",
+  "generated_at": "2026-11-01T00:08:33Z"
 }
