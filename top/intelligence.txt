@@ -1,1 +1,1 @@
-mistralai/mistral-large-4-1t-a52b
+google/diffusiongemma-26b-a4b-it
