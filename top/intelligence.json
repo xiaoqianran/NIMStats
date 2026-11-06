@@ -1,16 +1,16 @@
 {
-  "best_model": "google/diffusiongemma-26b-a4b-it",
-  "provider": "google",
+  "best_model": "mistralai/mistral-large-4-1t-a52b",
+  "provider": "mistralai",
   "score": 65,
   "intelligence": null,
-  "uptime": 99.3,
-  "avg_response_time_ms": 9237.600201409869,
-  "best_response_time_ms": 111,
-  "avg_time_to_first_token_ms": 9133.0,
-  "avg_throughput_tps": 388.9,
-  "total_runs": 2000,
-  "success_count": 1986,
-  "wins": 120,
-  "last_seen": "2026-11-06T07:25:53Z",
-  "generated_at": "2026-11-06T07:25:54Z"
+  "uptime": 98.7,
+  "avg_response_time_ms": 5479.819935691318,
+  "best_response_time_ms": 189,
+  "avg_time_to_first_token_ms": 2819.7,
+  "avg_throughput_tps": 39.0,
+  "total_runs": 315,
+  "success_count": 311,
+  "wins": 1,
+  "last_seen": "2026-11-06T15:51:19Z",
+  "generated_at": "2026-11-06T15:51:20Z"
 }
